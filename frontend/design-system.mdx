@@ -1,7 +1,7 @@
 ---
-title: "CruciDrive Glassmorphic design system tokens"
+title: "CruciDrive Glassmorphic design system token reference"
 sidebarTitle: "Design System"
-description: "Full reference for CruciDrive's design tokens: brand colors, glassmorphic backgrounds, typography with Outfit/Inter fonts, spacing, border radii, and animation constants."
+description: "Complete token reference for CruciDrive: colors, glassmorphic surfaces, Outfit/Inter typography, spacing scale, shapes, shadows, and animation constants."
 ---
 
 CruciDrive's design system is inspired by the ocean light and coastal atmosphere of Crucita. All tokens live in `src/constants/theme.ts` and implement a Glassmorphism visual language — translucent cards, backdrop blur, and subtle glass borders floating over interactive maps. The system is the single source of truth referenced by every component; never hard-code a hex value or pixel measurement that belongs to a token.
@@ -26,6 +26,9 @@ Brand colors derive from the natural palette of the Crucita coastline: teal from
 | `glassTextLight` | `#0F172A` | Primary text on light glass surfaces |
 | `glassTextMutedDark` | `#94A3B8` | Secondary/muted text on dark glass |
 | `glassTextMutedLight` | `#64748B` | Secondary/muted text on light glass |
+| `white` | `#FFFFFF` | Pure white — icon fills, high-contrast text on solid buttons |
+| `black` | `#000000` | Pure black — rarely used directly; prefer `darkBg` for backgrounds |
+| `transparent` | `'transparent'` | Utility value for removing background fills on overlays |
 
 ## Glassmorphic Tokens
 

@@ -100,14 +100,17 @@ frontend/app/
   _layout.tsx          # Root layout — fonts, splash screen, auth gate
   index.tsx            # Entry redirect → login or home
   (auth)/
+    _layout.tsx        # Auth group layout
     login.tsx          # Phone OTP login screen
   (app)/
     _layout.tsx        # Authenticated layout — socket provider
     (passenger)/
+      _layout.tsx      # Passenger tab/stack layout
       index.tsx        # Passenger map screen
       chat.tsx         # In-ride chat
       profile.tsx      # Profile screen
     (driver)/
+      _layout.tsx      # Driver tab/stack layout
       index.tsx        # Driver console
       chat.tsx         # In-ride chat
       profile.tsx      # Profile screen

@@ -12,8 +12,8 @@ Every ride in CruciDrive follows a deterministic lifecycle enforced entirely on 
 |---|---|---|
 | `solicitado` | `pasajero` | Ride has been requested; waiting for a driver to accept |
 | `aceptado` | `conductor` | Driver has accepted; a private chat thread is automatically created |
-| `en_curso` | `conductor` | Driver has started the trip; passengers are being transported |
-| `finalizado` | `conductor` | Trip has been completed successfully |
+| `en_curso` | `pasajero` or `conductor` | Driver has started the trip; passengers are being transported |
+| `finalizado` | `pasajero` or `conductor` | Trip has been completed successfully |
 | `cancelado` | `pasajero` or `conductor` | Ride was cancelled before or during transit (not applicable once `finalizado`) |
 
 ## State Transition Rules
@@ -43,11 +43,11 @@ An additional ownership check runs before the state guards: both `pasajero_id` a
 
 ```
 idle → solicitado → aceptado → en_curso → finalizado
-                  ↘           ↘          ↗
-                  cancelado ←──────────────
+          ↘             ↘          ↘
+           ╰──────────────────────────→ cancelado
 ```
 
-The `idle` state is a frontend-only concept used by the `useRideStore` Zustand store to represent the pre-request UI. It has no corresponding database row.
+`cancelado` can be triggered from `solicitado`, `aceptado`, or `en_curso`. It is blocked only when the ride is already `finalizado` or already `cancelado`. The `idle` state is a frontend-only concept used by the `useRideStore` Zustand store to represent the pre-request UI. It has no corresponding database row.
 
 ## Ride creation — solicitarViaje
 

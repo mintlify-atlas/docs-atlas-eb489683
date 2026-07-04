@@ -15,11 +15,11 @@ Passengers call this endpoint to place a tricimoto ride request. The server acce
 </ParamField>
 
 <ParamField body="origen" type="object" required>
-  Pickup coordinates as a JSON object with `lat` (latitude) and `lng` (longitude) expressed as decimal numbers.
+  Pickup coordinates as a JSON object with `lat` (latitude) and `lng` (longitude) expressed as decimal numbers. Both `lat` and `lng` are validated server-side.
 </ParamField>
 
 <ParamField body="destino" type="object" required>
-  Drop-off coordinates as a JSON object with `lat` and `lng` expressed as decimal numbers.
+  Drop-off coordinates as a JSON object with `lat` and `lng` expressed as decimal numbers. Only `destino.lat` is validated server-side; `destino.lng` is accepted without an explicit null-check in the current implementation.
 </ParamField>
 
 ### Example request body
@@ -65,7 +65,7 @@ Passengers call this endpoint to place a tricimoto ride request. The server acce
 
 | HTTP status | Cause |
 |-------------|-------|
-| `400` | `origen` or `destino` is missing, or either object is missing `lat` / `lng` fields |
+| `400` | `origen` or `destino` is missing, or `origen.lat`, `origen.lng`, or `destino.lat` is missing (note: the current validation checks `origen.lng` twice and does not separately validate `destino.lng`) |
 | `400` | Database insert error — e.g. a foreign-key violation on `pasajero_id` |
 
 ## Full curl example

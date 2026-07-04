@@ -1,5 +1,5 @@
 ---
-title: "GPS tracking and geographic sectors in CruciDrive"
+title: "GPS tracking and geographic sectors in CruciDrive app"
 sidebarTitle: "Geolocation"
 description: "CruciDrive uses PostGIS GEOGRAPHY columns and Socket.io sector rooms to broadcast tricimoto driver positions to passengers in real time within Crucita."
 ---
@@ -97,7 +97,7 @@ The `toWKT` utility in `backend/src/utils/geo.js` converts a `{ lng, lat }` pair
 
 ```js
 /**
- * Converts { lat, lng } coordinates to PostGIS Well-Known Text.
+ * Converts a longitude/latitude pair to PostGIS Well-Known Text.
  * PostGIS expects longitude before latitude: POINT(lng lat)
  */
 const toWKT = (lng, lat) => `POINT(${lng} ${lat})`;

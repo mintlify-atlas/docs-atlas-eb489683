@@ -11,10 +11,10 @@ description: "Memoized React hook that looks up fixed pricing, distance, and est
 ```typescript
 import { useTariff } from '@/hooks/useTariff';
 
-const result = useTariff(
-  originSectorId: string | null,
-  destinationSectorId: string | null
-): TariffResult;
+const result: TariffResult = useTariff(
+  originSectorId,       // string | null
+  destinationSectorId   // string | null
+);
 ```
 
 ## Parameters

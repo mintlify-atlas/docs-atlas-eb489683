@@ -78,14 +78,14 @@ The backend is a single Node.js process (`src/index.js`) that boots an Express H
 **MVC in Express**
 HTTP requests flow through a strict three-layer chain:
 
-```
+```text
 Incoming Request → routes/ (URL mapping) → middlewares/ (auth, role check) → controllers/ (Supabase queries + response)
 ```
 
 The three registered REST route groups are:
-- `POST /api/auth/*` — phone OTP login and user profile creation
-- `PATCH /api/viajes/*` — ride lifecycle management (create, accept, update status)
-- `GET/POST /api/chats/*` — chat thread and message history retrieval
+- `POST /api/auth/registro` — complete user profile creation after Supabase phone OTP sign-up
+- `POST /api/viajes/solicitar` — passenger creates a ride request; `POST /api/viajes/aceptar` — driver accepts a pending ride; `PATCH /api/viajes/:id/estado` — updates ride state (`en_curso`, `finalizado`, `cancelado`)
+- `GET /api/chats/:threadId/mensajes` — fetch the full message history for a specific chat thread
 
 **Zustand for Frontend State**
 The Expo app manages all cross-screen state — authenticated user session, active ride details, live driver coordinates, and chat messages — through **Zustand stores** located in `src/store/`. Zustand's minimal API avoids boilerplate while keeping state updates reactive and co-located with the logic that triggers them.
@@ -102,7 +102,7 @@ CruciDrive uses **two transport layers in parallel**:
 - **REST (HTTP)** — used for stateless, transactional operations: authentication, ride creation, ride acceptance, status changes, and fetching chat history.
 - **WebSockets (Socket.io)** — used for continuous, bidirectional real-time communication: live GPS position broadcasts from drivers to passengers, and in-ride chat message delivery.
 
-```
+```text
 [Mobile App] ──HTTP──► [Express API]  ──► [Supabase / PostgreSQL]
 [Mobile App] ──WS────► [Socket.io]    ──► [Supabase / PostgreSQL]
 ```
@@ -128,7 +128,7 @@ Every Socket.io connection goes through a **JWT authentication middleware** befo
 
 The Supabase PostgreSQL database (`database.sql`) defines **6 tables** with PostGIS and full Row Level Security enabled:
 
-```
+```text
 perfiles ──────────────────────────────────────────┐
   id (UUID, PK → auth.users)                       │
   rol: 'pasajero' | 'conductor' | 'admin'          │
@@ -183,7 +183,7 @@ The `authMiddleware.js` extracts the `Authorization: Bearer <token>` header on e
 
 **Supabase Row Level Security (RLS)**
 Every table has RLS enabled. Key policies include:
-- `perfiles`: users can only read, insert, or update their own profile row
+- `perfiles`: any authenticated user can read all profiles; users can only insert or update their own profile row
 - `tricimotos`: drivers can only update their own vehicle record
 - `viajes`: passengers and drivers can only read/update trips they are a party to
 - `messages`: users can only read or insert messages in chat threads they are a member of

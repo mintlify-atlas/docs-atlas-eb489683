@@ -1,7 +1,7 @@
 ---
 title: "CruciDrive WebSocket connection and authentication guide"
 sidebarTitle: "WS Overview"
-description: "CruciDrive uses Socket.io 4 over WebSockets for real-time GPS tracking and in-ride chat. Connections require a valid Supabase JWT passed in the handshake auth object."
+description: "CruciDrive uses Socket.io over WebSockets for GPS tracking and live chat. All connections require a Supabase JWT passed in the handshake auth object."
 ---
 
 Socket.io powers two real-time modules in CruciDrive: sector-based GPS location broadcasting and in-ride chat messaging. Every feature that updates without a page refresh — a driver's pin moving on the map, a chat bubble appearing — is delivered over a single persistent Socket.io connection that both the passenger and driver apps share. All connections must authenticate with a valid Supabase JWT before the server permits any events.

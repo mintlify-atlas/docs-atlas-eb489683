@@ -1,7 +1,7 @@
 ---
 title: "Reusable UI components in the CruciDrive design system"
 sidebarTitle: "Components"
-description: "Reference for CruciDrive's shared UI components: GlassCard, GlassButton, GlassInput, BlurContainer, PanicButton, LoadingSpinner, and Map."
+description: "Reference for CruciDrive's shared UI components: GlassCard, GlassButton, GlassInput, BlurContainer, PanicButton, LoadingSpinner, Map, and AppTabLayout."
 ---
 
 CruciDrive exports a set of pre-built Glassmorphic components from `src/components/index.ts`. All components consume design tokens from `theme.ts` and use `expo-blur` for backdrop blur effects. Importing from the barrel export guarantees you always get the platform-correct variant — on web, `Map` resolves to `Map.web.tsx` automatically via the Metro bundler's platform extension resolution.
@@ -373,13 +373,66 @@ export function RideMap() {
 
 ---
 
+## AppTabLayout
+
+A shared tab-bar layout component used by both the passenger and driver app shells. It abstracts the common `expo-router` `<Tabs>` configuration — `BlurView` tab bar background, styling constants, and inactive/active tint colors — and accepts only the values that differ between the two shells: the active color and the list of tab definitions. This prevents duplicating screen options across `(pasajero)/_layout.tsx` and `(conductor)/_layout.tsx`.
+
+`AppTabLayout` is not included in the barrel export because it is a layout component consumed directly by `expo-router` layout files, not by individual screens. Import it with a direct path:
+
+```typescript
+import { AppTabLayout } from '@/components/AppTabLayout';
+```
+
+### Types
+
+```typescript
+export interface TabDefinition {
+  /** Route name matched by expo-router (e.g. 'index', 'chat') */
+  name: string;
+  /** Human-readable tab label */
+  title: string;
+  /** Ionicons glyph key for the tab icon */
+  iconName: keyof typeof Ionicons.glyphMap;
+}
+```
+
+### Props
+
+<ParamField body="tabs" type="TabDefinition[]" required>
+  Array of tab definitions. Each entry maps to a `<Tabs.Screen>` with a name, title, and Ionicons icon. Order determines the left-to-right tab rendering order.
+</ParamField>
+
+<ParamField body="activeColor" type="string" required>
+  Color applied to the active tab icon and label. Use `COLORS.primary` (`#0D9488`) for the passenger shell and `COLORS.success` (`#10B981`) for the driver shell to visually distinguish the two modes.
+</ParamField>
+
+### Usage
+
+```tsx
+import { AppTabLayout, type TabDefinition } from '@/components/AppTabLayout';
+import { COLORS } from '@/constants/theme';
+
+const PASSENGER_TABS: TabDefinition[] = [
+  { name: 'index',  title: 'Inicio',  iconName: 'home-outline' },
+  { name: 'chat',   title: 'Chat',    iconName: 'chatbubble-outline' },
+  { name: 'perfil', title: 'Perfil',  iconName: 'person-outline' },
+];
+
+// Inside (pasajero)/_layout.tsx
+export default function PassengerLayout() {
+  return <AppTabLayout tabs={PASSENGER_TABS} activeColor={COLORS.primary} />;
+}
+```
+
+---
+
 ## Exports
 
 The full barrel export from `src/components/index.ts`:
 
 ```typescript
-export { GlassButton } from './GlassButton';
 export { GlassCard } from './GlassCard';
+export { GlassButton } from './GlassButton';
 export { GlassInput } from './GlassInput';
 export { BlurContainer } from './BlurContainer';
 export { PanicButton } from './PanicButton';
@@ -387,5 +440,5 @@ export { LoadingSpinner } from './LoadingSpinner';
 ```
 
 <Note>
-  `Map` is not included in the barrel export because it is a default export. Import it directly: `import MapView, { Marker, Region } from '@/components/Map'`. The web fallback (`Map.web.tsx`) is resolved automatically by Metro — no manual platform branching required.
+  `Map` and `AppTabLayout` are not included in the barrel export. `Map` is a default export — import it directly: `import MapView, { Marker, Region } from '@/components/Map'`. `AppTabLayout` is a layout-layer component imported directly by `expo-router` layout files: `import { AppTabLayout } from '@/components/AppTabLayout'`. The web fallback (`Map.web.tsx`) is resolved automatically by Metro — no manual platform branching required.
 </Note>

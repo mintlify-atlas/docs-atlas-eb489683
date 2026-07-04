@@ -1,7 +1,7 @@
 ---
 title: "Socket.io events reference for GPS tracking and chat"
 sidebarTitle: "WS Events"
-description: "Complete reference for all Socket.io client-to-server and server-to-client events in CruciDrive, covering GPS location updates and real-time chat messaging."
+description: "Socket.io event reference for CruciDrive — all client-to-server and server-to-client events for real-time GPS location tracking and in-ride chat."
 ---
 
 CruciDrive's Socket.io server handles 4 client-emitted events and dispatches 3 server-emitted events across two functional modules: geolocation and chat. All events require a valid authenticated connection — see the [WS Overview](/api/websocket-overview) for the handshake and authentication flow. Events emitted before authentication completes are silently dropped by the middleware.

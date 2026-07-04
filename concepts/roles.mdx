@@ -1,7 +1,7 @@
 ---
 title: "User roles and role-based access control in CruciDrive"
 sidebarTitle: "Roles & Access"
-description: "CruciDrive enforces three roles — pasajero, conductor, and admin — validated on every REST request and WebSocket connection via Supabase JWT and role middleware."
+description: "CruciDrive enforces three roles — pasajero, conductor, and admin — validated on every REST request and WebSocket connection via Supabase JWT."
 ---
 
 CruciDrive's authorization model is built on three mutually exclusive roles stored in the `public.perfiles` table: **pasajero** (rider), **conductor** (driver), and **admin** (administrator). Every REST request passes through two chained middlewares — `authMiddleware` (validates the JWT) and `roleMiddleware` (checks the role) — before reaching a controller. WebSocket connections are authenticated through an equivalent `io.use()` guard inside `socketHandler.js`, ensuring that role-gated behavior is consistent across both transport layers.

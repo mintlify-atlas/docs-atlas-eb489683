@@ -78,7 +78,7 @@ Returns an array of message objects ordered by `created_at ASC`. Each object inc
 Before any message data is read, the controller calls the `checkThreadMembership(threadId, userId)` helper from `supabaseHelpers.js`. This function queries `public.thread_members` using a `maybeSingle()` selector — if a row matching both `thread_id` and `user_id` exists, the request proceeds; otherwise the server short-circuits with a `403`. This mirrors the Row Level Security policy on the `messages` table in Supabase, providing defense in depth at both the application and database layers.
 
 ```js
-const { member, error } = await checkThreadMembership(threadId, userId);
+const { member, error: memberError } = await checkThreadMembership(threadId, userId);
 
 if (memberError) {
   return errorResponse(res, 500, 'Error al verificar la afiliación al hilo de chat.', memberError.message);

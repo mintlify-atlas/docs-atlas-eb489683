@@ -1,7 +1,7 @@
 ---
 title: "Real-time in-ride chat via Socket.io and Supabase RLS"
 sidebarTitle: "Real-Time Chat"
-description: "When a driver accepts a ride, CruciDrive automatically creates a private chat thread. Messages are persisted in PostgreSQL and broadcast via Socket.io rooms."
+description: "When a driver accepts a ride, CruciDrive creates a private chat thread. Messages are persisted in PostgreSQL and broadcast live via Socket.io rooms."
 ---
 
 CruciDrive's in-ride chat is a first-class safety and coordination feature. The moment a conductor accepts a ride, the backend atomically creates a private `threads` record and two `thread_members` rows — one for the passenger and one for the driver — opening a dedicated, RLS-protected communication channel. Messages are persisted to the `messages` table in PostgreSQL and simultaneously broadcast over a Socket.io `chat:{threadId}` room, so both participants see new messages within milliseconds without any polling. Access to every thread is enforced by Supabase Row Level Security policies at the database layer, independent of application code.
