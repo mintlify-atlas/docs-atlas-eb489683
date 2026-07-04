@@ -1,0 +1,275 @@
+---
+title: "Socket.io events reference for GPS tracking and chat"
+sidebarTitle: "WS Events"
+description: "Complete reference for all Socket.io client-to-server and server-to-client events in CruciDrive, covering GPS location updates and real-time chat messaging."
+---
+
+CruciDrive's Socket.io server handles 4 client-emitted events and dispatches 3 server-emitted events across two functional modules: geolocation and chat. All events require a valid authenticated connection — see the [WS Overview](/api/websocket-overview) for the handshake and authentication flow. Events emitted before authentication completes are silently dropped by the middleware.
+
+---
+
+## Geolocation events
+
+### `join_sector` — client → server
+
+Subscribes the authenticated client to a sector room so they receive `location_updated` broadcasts whenever a driver in that area moves. Call this as soon as the map screen mounts, and re-call it after any reconnect.
+
+**Access:** any authenticated user (passenger or driver).
+
+<ParamField body="sectorId" type="string" required>
+  Identifier of the geographic sector to subscribe to. Must be one of:
+  `centro`, `playa`, `las_gilces`, `los_arenales`, `san_jacinto`.
+  The server calls `socket.join('sector:${sectorId}')` on receipt.
+</ParamField>
+
+```typescript
+socket.emit('join_sector', { sectorId: 'playa' });
+```
+
+---
+
+### `update_location` — client → server
+
+Broadcasts the driver's current GPS coordinates to every passenger subscribed to the same sector room. The server simultaneously persists the new position to the `tricimotos` table so the database always reflects the last known location.
+
+**Access:** `conductor` role only. If a user with `rol: 'pasajero'` emits this event, the server responds with `error_message: 'Acción denegada. Solo los conductores pueden actualizar geolocalización.'` and takes no further action.
+
+<ParamField body="sectorId" type="string" required>
+  The sector room to broadcast the update into, e.g. `playa`. Must match the
+  sector the driver is currently operating in.
+</ParamField>
+
+<ParamField body="coords" type="object" required>
+  Current GPS position of the driver's tricimoto.
+
+  <Expandable title="coords fields">
+    <ParamField body="lat" type="number" required>
+      Latitude in decimal degrees (WGS84), e.g. `-1.0470`.
+    </ParamField>
+
+    <ParamField body="lng" type="number" required>
+      Longitude in decimal degrees (WGS84), e.g. `-80.5485`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="estado" type="string" required>
+  Operational status of the tricimoto. One of `disponible`, `ocupado`, or
+  `inactivo`. Written to `tricimotos.estado` alongside the position update.
+  Defaults to `disponible` if omitted.
+</ParamField>
+
+```typescript
+socket.emit('update_location', {
+  sectorId: 'playa',
+  coords: { lat: -1.0470, lng: -80.5485 },
+  estado: 'disponible',
+});
+```
+
+**Side effects:**
+- Writes `ubicacion_actual` (PostGIS WKT point), `estado`, and `updated_at` to `public.tricimotos` where `conductor_id = socket.user.id`.
+- Broadcasts `location_updated` to the sector room excluding the sender (`socket.to(room).emit(...)`).
+
+---
+
+### `location_updated` — server → client
+
+Delivered to all clients subscribed to a sector room (excluding the emitting driver) each time a driver sends a position update. Passengers use this event to move the driver pin on the map in real time.
+
+<ResponseField name="conductorId" type="string">
+  UUID of the driver whose position changed. Matches `tricimotos.conductor_id`.
+</ResponseField>
+
+<ResponseField name="nombre" type="string">
+  Display name of the driver from `public.perfiles`, e.g. `"Carlos Vera"`.
+</ResponseField>
+
+<ResponseField name="coords" type="object">
+  Updated GPS coordinates of the driver.
+
+  <Expandable title="coords fields">
+    <ResponseField name="lat" type="number">
+      Latitude in decimal degrees.
+    </ResponseField>
+
+    <ResponseField name="lng" type="number">
+      Longitude in decimal degrees.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="estado" type="string">
+  Current operational status of the driver's tricimoto: `disponible`,
+  `ocupado`, or `inactivo`.
+</ResponseField>
+
+```json
+{
+  "conductorId": "a1b2c3d4-...",
+  "nombre": "Carlos Vera",
+  "coords": { "lat": -1.0470, "lng": -80.5485 },
+  "estado": "disponible"
+}
+```
+
+---
+
+## Chat events
+
+### `join_chat` — client → server
+
+Joins the private Socket.io room for a specific ride chat thread. Call this after loading message history via `GET /api/chats/:threadId/mensajes` so new messages arrive in real time without polling.
+
+**Access:** authenticated users who are registered members of the thread. Membership is validated server-side via `checkThreadMembership(threadId, socket.user.id)` — the same `thread_members` query used by the REST endpoint.
+
+<ParamField body="threadId" type="string" required>
+  UUID of the chat thread. Returned by the `aceptarViaje` response when a
+  ride is accepted. The server calls `socket.join('chat:${threadId}')` after
+  the membership check passes.
+</ParamField>
+
+```typescript
+socket.emit('join_chat', { threadId: 'b3f9a42c-...' });
+```
+
+**If the user is not a thread member:** the server emits `error_message` with the value `"No tienes permiso para ingresar a este chat."` and does not add the socket to the room.
+
+---
+
+### `send_message` — client → server
+
+Sends a message to the active chat room. The server inserts the message into the `messages` table and then broadcasts it to all members of the room — including the sender — so both sides of the conversation receive a single authoritative event with the final persisted payload.
+
+<ParamField body="threadId" type="string" required>
+  UUID of the target chat thread. The sender must have already joined this room
+  via `join_chat`.
+</ParamField>
+
+<ParamField body="content" type="string" required>
+  Plain-text message body. Whitespace is trimmed before storage and before the
+  empty-string check — a message containing only spaces is rejected.
+</ParamField>
+
+```typescript
+socket.emit('send_message', {
+  threadId: 'b3f9a42c-...',
+  content: 'Estoy llegando al malecón.',
+});
+```
+
+**Side effects:**
+- Inserts a row into `public.messages` with `thread_id`, `sender_id` (from `socket.user.id`), and trimmed `content`.
+- Selects the newly inserted row with a `perfiles` join and emits `message_received` to `io.to('chat:{threadId}')` — all room members, including the sender.
+
+---
+
+### `message_received` — server → client
+
+Delivered to every member of a chat room when any participant sends a message via `send_message`. This is the single source of truth for rendering new messages — do not optimistically append the message locally before this event fires, as the payload contains the final database-assigned `id` and `created_at`.
+
+<ResponseField name="id" type="string">
+  UUID of the newly inserted message row.
+</ResponseField>
+
+<ResponseField name="thread_id" type="string">
+  UUID of the chat thread this message belongs to.
+</ResponseField>
+
+<ResponseField name="sender_id" type="string">
+  UUID of the user who sent the message.
+</ResponseField>
+
+<ResponseField name="content" type="string">
+  Trimmed message text as stored in the database.
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  ISO 8601 timestamp assigned by the database at insert time.
+</ResponseField>
+
+<ResponseField name="perfiles" type="object">
+  Sender profile resolved via the `sender_id` foreign key join.
+
+  <Expandable title="perfiles fields">
+    <ResponseField name="nombre" type="string">
+      Full display name of the sender.
+    </ResponseField>
+
+    <ResponseField name="rol" type="string">
+      Role of the sender: `pasajero`, `conductor`, or `admin`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+```json
+{
+  "id": "550e8400-...",
+  "thread_id": "b3f9a42c-...",
+  "sender_id": "a1b2c3d4-...",
+  "content": "Estoy llegando al malecón.",
+  "created_at": "2024-11-15T14:25:00.000Z",
+  "perfiles": { "nombre": "Carlos Vera", "rol": "conductor" }
+}
+```
+
+---
+
+## Error handling
+
+The `error_message` server event is sent exclusively to the offending client (not broadcast to the room) in the following situations:
+
+| Trigger | Error string |
+|---------|-------------|
+| A `pasajero` emits `update_location` | `"Acción denegada. Solo los conductores pueden actualizar geolocalización."` |
+| `update_location` is missing `coords`, `lat`, `lng`, or `sectorId` | `"Parámetros de ubicación incompletos."` |
+| `join_chat` — user is not in `thread_members` | `"No tienes permiso para ingresar a este chat."` |
+| `send_message` — `content` is empty or whitespace-only | `"Contenido del mensaje vacío o threadId faltante."` |
+| `send_message` — Supabase insert fails | `"No se pudo guardar el mensaje."` |
+
+Listen for this event globally and display the string as an in-app alert or toast:
+
+```typescript
+socket.on('error_message', (message: string) => {
+  console.warn('[Socket.io] Error del servidor:', message);
+  // Show to user via your alert/toast system
+});
+```
+
+---
+
+## TypeScript integration example
+
+The `useSocket` hook exposes typed wrappers around all four client events. The example below joins a sector on mount, listens for driver updates, and cleans up the listener on unmount:
+
+```typescript
+const { joinSector, onEvent, updateLocation } = useSocket();
+
+// Join sector on mount
+useEffect(() => {
+  joinSector('playa');
+
+  const unsub = onEvent('location_updated', (data) => {
+    console.log('Driver update:', data.nombre, data.coords);
+  });
+
+  // Unsubscribe when the component unmounts
+  return unsub;
+}, []);
+```
+
+For chat screens, combine `joinChat` and `sendMessage` with the `message_received` listener after loading history from the REST endpoint:
+
+```typescript
+const { joinChat, sendMessage, onEvent } = useSocket();
+
+useEffect(() => {
+  joinChat(threadId);
+
+  const unsub = onEvent('message_received', (msg) => {
+    setMessages((prev) => [...prev, msg]);
+  });
+
+  return unsub;
+}, [threadId]);
+```

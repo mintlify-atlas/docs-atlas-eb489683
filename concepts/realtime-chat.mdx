@@ -1,0 +1,246 @@
+---
+title: "Real-time in-ride chat via Socket.io and Supabase RLS"
+sidebarTitle: "Real-Time Chat"
+description: "When a driver accepts a ride, CruciDrive automatically creates a private chat thread. Messages are persisted in PostgreSQL and broadcast via Socket.io rooms."
+---
+
+CruciDrive's in-ride chat is a first-class safety and coordination feature. The moment a conductor accepts a ride, the backend atomically creates a private `threads` record and two `thread_members` rows — one for the passenger and one for the driver — opening a dedicated, RLS-protected communication channel. Messages are persisted to the `messages` table in PostgreSQL and simultaneously broadcast over a Socket.io `chat:{threadId}` room, so both participants see new messages within milliseconds without any polling. Access to every thread is enforced by Supabase Row Level Security policies at the database layer, independent of application code.
+
+## Thread Creation
+
+The thread is created inside `aceptarViaje` as part of a guarded transactional sequence. After updating the ride to `aceptado`, the controller inserts a `threads` row, then immediately inserts two `thread_members` rows. Rollback logic is applied at each step so no orphaned thread can exist if a subsequent write fails:
+
+```js
+// Step 1: create the thread tied to this ride
+const { data: thread, error: threadError } = await supabase
+  .from('threads')
+  .insert([{ viaje_id: viajeId }])
+  .select()
+  .single();
+
+if (threadError) {
+  // Rollback ride to solicitado
+  await supabase.from('viajes')
+    .update({ conductor_id: null, estado: 'solicitado' })
+    .eq('id', viajeId);
+  return errorResponse(res, 500, 'Error al inicializar el hilo de comunicación del viaje.', threadError.message);
+}
+
+// Step 2: add both participants as thread members
+const miembros = [
+  { thread_id: thread.id, user_id: viaje.pasajero_id },
+  { thread_id: thread.id, user_id: conductorId }
+];
+
+const { error: membersError } = await supabase
+  .from('thread_members')
+  .insert(miembros);
+
+if (membersError) {
+  // Rollback thread and ride
+  await supabase.from('threads').delete().eq('id', thread.id);
+  await supabase.from('viajes')
+    .update({ conductor_id: null, estado: 'solicitado' })
+    .eq('id', viajeId);
+  return errorResponse(res, 500, 'Error al registrar los participantes en el chat del viaje.', membersError.message);
+}
+```
+
+The `thread.id` returned from this flow is included in the `aceptarViaje` response body as `chat.threadId` so the client can immediately join the Socket.io room.
+
+## Database Schema
+
+The chat subsystem spans three tables with clear referential integrity:
+
+<AccordionGroup>
+  <Accordion title="threads">
+    | Column | Type | Notes |
+    |---|---|---|
+    | `id` | `UUID` | Primary key |
+    | `viaje_id` | `UUID` | FK → `viajes(id)` **ON DELETE SET NULL** — chat history survives if the ride record is purged |
+
+    The `ON DELETE SET NULL` on `viaje_id` is intentional: it preserves the message history in an audit-accessible state even after a ride is archived or deleted.
+  </Accordion>
+  <Accordion title="thread_members">
+    | Column | Type | Notes |
+    |---|---|---|
+    | `thread_id` | `UUID` | FK → `threads(id)` |
+    | `user_id` | `UUID` | FK → `perfiles(id)` |
+    | — | — | `UNIQUE(thread_id, user_id)` prevents duplicate membership rows |
+
+    The composite unique index also serves as `idx_thread_members_thread_id` and `idx_thread_members_user_id`, making membership lookups — which happen on every `join_chat` event — O(log N).
+  </Accordion>
+  <Accordion title="messages">
+    | Column | Type | Notes |
+    |---|---|---|
+    | `id` | `UUID` | Primary key |
+    | `thread_id` | `UUID` | FK → `threads(id)` — indexed as `idx_messages_thread_id` |
+    | `sender_id` | `UUID` | FK → `perfiles(id)` |
+    | `content` | `TEXT` | Message body |
+    | `created_at` | `TIMESTAMPTZ` | Set by DB default |
+    | `perfiles:sender_id` | joined | `nombre`, `rol` joined for display in history queries |
+  </Accordion>
+</AccordionGroup>
+
+## Row Level Security
+
+Two RLS policies on `public.messages` ensure that only the two participants of a ride can read or write its chat, regardless of how the database is accessed:
+
+**SELECT — reading messages:**
+
+A user can only read messages from threads where they appear in `thread_members`:
+
+```sql
+EXISTS (
+  SELECT 1 FROM thread_members
+  WHERE thread_members.thread_id = messages.thread_id
+  AND thread_members.user_id = auth.uid()
+)
+```
+
+**INSERT — sending messages:**
+
+A double guard prevents both spoofed sender IDs and unauthorized thread writes:
+
+```sql
+-- sender_id in the payload must equal the authenticated user's UID
+auth.uid() = sender_id
+AND
+-- the sender must be a member of the target thread
+EXISTS (
+  SELECT 1 FROM thread_members
+  WHERE thread_members.thread_id = messages.thread_id
+  AND thread_members.user_id = auth.uid()
+)
+```
+
+This means even a correctly authenticated user with a valid JWT cannot inject messages into another passenger's chat — the database itself rejects the insert.
+
+## Socket Events for Chat
+
+The Socket.io chat module uses two events: `join_chat` to subscribe to a room, and `send_message` to deliver a message.
+
+### join_chat
+
+The client emits `join_chat` after the driver accepts (providing the `threadId` returned in the `aceptarViaje` response). The server verifies membership via the `checkThreadMembership` helper before joining the socket to the room:
+
+```js
+socket.on('join_chat', async ({ threadId }) => {
+  if (!threadId) return;
+
+  const { member, error } = await checkThreadMembership(threadId, socket.user.id);
+
+  if (error || !member) {
+    return socket.emit('error_message', 'No tienes permiso para ingresar a este chat.');
+  }
+
+  const room = `chat:${threadId}`;
+  socket.join(room);
+});
+```
+
+Client payload:
+```json
+{
+  "threadId": "uuid-of-thread"
+}
+```
+
+### send_message
+
+The client emits `send_message` with the thread ID and message content. The server persists the message to PostgreSQL with a joined `perfiles` select, then broadcasts the full message object — including the sender's `nombre` and `rol` — to everyone in the room:
+
+```js
+socket.on('send_message', async ({ threadId, content }) => {
+  if (!threadId || !content || content.trim() === '') {
+    return socket.emit('error_message', 'Contenido del mensaje vacío o threadId faltante.');
+  }
+
+  const { data: message, error } = await supabase
+    .from('messages')
+    .insert([
+      {
+        thread_id: threadId,
+        sender_id: socket.user.id,
+        content: content.trim()
+      }
+    ])
+    .select(`
+      id,
+      thread_id,
+      sender_id,
+      content,
+      created_at,
+      perfiles:sender_id (
+        nombre,
+        rol
+      )
+    `)
+    .single();
+
+  if (error) {
+    return socket.emit('error_message', 'No se pudo guardar el mensaje.');
+  }
+
+  const room = `chat:${threadId}`;
+  io.to(room).emit('message_received', message);
+});
+```
+
+Client payload for `send_message`:
+```json
+{
+  "threadId": "uuid-of-thread",
+  "content": "Estoy en el malecón, esquina del restaurante."
+}
+```
+
+`message_received` broadcast payload:
+```json
+{
+  "id": "uuid-of-message",
+  "thread_id": "uuid-of-thread",
+  "sender_id": "uuid-of-sender",
+  "content": "Estoy en el malecón, esquina del restaurante.",
+  "created_at": "2024-11-01T14:32:00.000Z",
+  "perfiles": {
+    "nombre": "María Torres",
+    "rol": "pasajero"
+  }
+}
+```
+
+## Message History REST Endpoint
+
+When a user opens the chat screen, the app calls the REST endpoint to load all prior messages before connecting to the Socket.io room. This avoids any gap in history that might occur between screen mount and WebSocket subscription:
+
+```
+GET /api/chats/:threadId/mensajes
+Authorization: Bearer <token>
+```
+
+The query performs a joined SELECT that includes the sender's profile for display purposes:
+
+```js
+.select(`
+  id,
+  thread_id,
+  sender_id,
+  content,
+  created_at,
+  perfiles:sender_id (
+    nombre,
+    rol
+  )
+`)
+```
+
+The response is an array of message objects in chronological order. The `idx_messages_thread_id` B-Tree index ensures this query scales efficiently regardless of total message volume.
+
+<Warning>
+Socket.io messages are only delivered to connections that are **actively joined** to the `chat:{threadId}` room at the moment of broadcast. If the app is backgrounded or the connection drops temporarily, those messages will not be re-delivered over the socket. Always call `GET /api/chats/:threadId/mensajes` on chat screen mount to load the complete persisted history before subscribing to live events.
+</Warning>
+
+<Tip>
+The `idx_messages_thread_id` B-Tree index on `public.messages(thread_id)` ensures that history queries execute in **O(log N)** time. Without this index, loading history would require a full table scan that degrades linearly as the platform accumulates rides — with the index, query time stays near-constant regardless of total message count.
+</Tip>

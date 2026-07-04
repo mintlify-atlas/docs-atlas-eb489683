@@ -1,0 +1,107 @@
+---
+title: "CruciDrive API authentication with Supabase JWT"
+sidebarTitle: "Auth Overview"
+description: "All CruciDrive API endpoints require a Supabase-issued Bearer JWT. Learn how to obtain tokens via Phone OTP and pass them in requests."
+---
+
+CruciDrive delegates all authentication to Supabase Auth — the backend never stores passwords or issues its own tokens. Every REST endpoint except the public OTP flow requires an `Authorization: Bearer <token>` header containing a valid Supabase-issued JWT. If the header is missing, malformed, or the token is expired, the server returns a `401` before any controller logic runs.
+
+## Obtaining a token
+
+CruciDrive uses a passwordless **Phone OTP** flow. Users identify themselves by their Ecuadorian mobile number and a one-time code delivered by SMS. There are no passwords involved at any step.
+
+**Step 1 — Send OTP:** call `supabase.auth.signInWithOtp({ phone })`. Supabase sends a 6-digit code to the number via SMS.
+
+**Step 2 — Verify OTP:** call `supabase.auth.verifyOtp({ phone, token, type: 'sms' })`. On success, Supabase returns a session object containing the `access_token` you pass to every API request.
+
+```typescript
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// Step 1: Send OTP to the user's phone
+await supabase.auth.signInWithOtp({ phone: '+593987654321' });
+
+// Step 2: Verify OTP and retrieve session
+const { data } = await supabase.auth.verifyOtp({
+  phone: '+593987654321',
+  token: '123456',
+  type: 'sms',
+});
+
+const accessToken = data.session?.access_token;
+```
+
+## Using the token in API calls
+
+Include the `access_token` as a `Bearer` token in the `Authorization` header of every request. The example below registers a new passenger profile immediately after OTP verification:
+
+```bash
+curl -X POST https://api.crucidrive.local/api/auth/registro \
+  -H "Authorization: Bearer <your_access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"rol": "pasajero", "nombre": "Ana Mendoza", "telefono": "+593987654321"}'
+```
+
+## Token validation flow
+
+Every protected route passes through `authMiddleware` before reaching the controller. The middleware performs the following steps:
+
+1. Reads the `Authorization` header and asserts it starts with `Bearer `.
+2. Extracts the raw token string.
+3. Calls `supabase.auth.getUser(token)` — Supabase validates the signature and expiry server-side.
+4. If valid, attaches the returned user object to `req.user` and calls `next()`.
+5. On any failure, it short-circuits with a `401` error response.
+
+```js
+const authMiddleware = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return errorResponse(res, 401, 'No autorizado. Se requiere un token de tipo Bearer en la cabecera.');
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  const { data: { user }, error } = await supabase.auth.getUser(token);
+
+  if (error || !user) {
+    return errorResponse(res, 401, 'Token inválido o expirado.', error ? error.message : null);
+  }
+
+  req.user = user;
+  next();
+};
+```
+
+Role-protected routes additionally run `roleMiddleware`, which queries `public.perfiles` for the authenticated user's `rol` and rejects the request with `403` if the role is not in the allowed list for that route.
+
+## Error responses
+
+All errors across the API share a single JSON shape produced by `response.js`:
+
+```json
+{
+  "status": "error",
+  "message": "Human-readable description of the problem.",
+  "details": "Optional lower-level detail, e.g. the Supabase error message."
+}
+```
+
+The `details` field is omitted when there is no additional context to surface.
+
+### Common authentication errors
+
+| HTTP status | Scenario |
+|-------------|----------|
+| `401` | `Authorization` header is absent or does not start with `Bearer ` |
+| `401` | Token is invalid, malformed, or has expired |
+| `403` | Token is valid but the user's role is not permitted on this route |
+| `404` | Token is valid but no matching profile exists in `public.perfiles` |
+
+<Note>
+  Supabase access tokens expire according to your project's session configuration (default: 1 hour). When your app receives a `401`, attempt a silent refresh with `supabase.auth.refreshSession()` and retry the original request with the new `access_token`.
+</Note>
+
+<Warning>
+  Never embed `SUPABASE_SERVICE_ROLE_KEY` in the mobile app. The service role key bypasses Row-Level Security and grants full database access. Always use `SUPABASE_ANON_KEY` on the client side.
+</Warning>

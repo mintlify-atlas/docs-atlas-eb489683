@@ -1,0 +1,151 @@
+---
+title: "useRideStore — active ride state management with Zustand"
+sidebarTitle: "Ride Store"
+description: "Zustand store that tracks the full lifecycle of an active CruciDrive ride, from idle through request, acceptance, in-progress, and completion."
+---
+
+`useRideStore` manages all frontend state for an active ride. It mirrors the server-side ride states stored in the `viajes` table and additionally tracks driver info, the associated chat thread ID, and the `isRequesting` UI loading flag that disables the request button during the API call. When a ride reaches `finalizado` or `cancelado`, call `clearRide()` to return the store to its `idle` baseline.
+
+## Types
+
+### `RideStatus`
+
+The union type for every valid state in the ride lifecycle:
+
+```typescript
+type RideStatus =
+  | 'idle'
+  | 'solicitado'
+  | 'aceptado'
+  | 'en_curso'
+  | 'finalizado'
+  | 'cancelado';
+```
+
+### `DriverInfo`
+
+Populated once a conductor accepts the ride request:
+
+```typescript
+interface DriverInfo {
+  id: string;
+  nombre: string;
+  telefono: string;
+  placa: string;        // tricimoto license plate
+  calificacion: number;
+  avatar_url?: string;
+}
+```
+
+### `ActiveRide`
+
+The full data shape for a ride in progress:
+
+```typescript
+interface ActiveRide {
+  /** Database ID of the viaje record */
+  id: string;
+  /** Current ride status */
+  status: RideStatus;
+  /** Origin sector ID (e.g. 'centro') */
+  originSectorId: string;
+  /** Human-readable origin name */
+  originName: string;
+  /** Destination sector ID (e.g. 'playa') */
+  destinationSectorId: string;
+  /** Human-readable destination name */
+  destinationName: string;
+  /** Fixed fare in USD */
+  price: number;
+  /** Estimated distance in km */
+  estimatedDistanceKm: number;
+  /** Estimated travel time in minutes */
+  estimatedTimeMin: number;
+  /** Assigned driver — null until status reaches 'aceptado' */
+  driver: DriverInfo | null;
+  /** Chat thread ID for in-ride messaging — null until created */
+  chatThreadId: string | null;
+  /** ISO timestamp of ride creation */
+  createdAt: string;
+}
+```
+
+## State shape
+
+```typescript
+interface RideState {
+  /** Current active ride, or null when idle */
+  activeRide: ActiveRide | null;
+  /** True while the ride request API call is in flight */
+  isRequesting: boolean;
+
+  // ── Actions ────────────────────────────────────────────
+  setActiveRide: (ride: ActiveRide | null) => void;
+  updateRide: (updates: Partial<ActiveRide>) => void;
+  setRideStatus: (status: RideStatus) => void;
+  setDriver: (driver: DriverInfo) => void;
+  setRequesting: (requesting: boolean) => void;
+  clearRide: () => void;
+}
+```
+
+## Actions
+
+| Action | Signature | Description |
+|---|---|---|
+| `setActiveRide` | `(ride: ActiveRide \| null) => void` | Replaces the entire `activeRide` object. Use this immediately after a successful `/api/viajes/solicitar` response. |
+| `updateRide` | `(updates: Partial<ActiveRide>) => void` | Merges partial updates into the existing `activeRide`. No-ops if `activeRide` is null. |
+| `setRideStatus` | `(status: RideStatus) => void` | Updates only the `status` field of the active ride. No-ops if `activeRide` is null. |
+| `setDriver` | `(driver: DriverInfo) => void` | Sets the `driver` field **and** simultaneously transitions `status` to `'aceptado'`. |
+| `setRequesting` | `(requesting: boolean) => void` | Toggles the `isRequesting` loading flag. Set to `true` before the API call, `false` in the finally block. |
+| `clearRide` | `() => void` | Resets to `{ activeRide: null, isRequesting: false }`. Call after `finalizado` or `cancelado`. |
+
+## Ride status flow
+
+```
+idle → (setRequesting=true) → solicitado → aceptado → en_curso → finalizado
+                                          ↘                     ↗
+                                           cancelado ───────────
+```
+
+The `idle` state exists only in the store — there is no corresponding row in `viajes`. A ride enters `solicitado` the moment the API creates it. `cancelado` can be reached from `solicitado`, `aceptado`, or `en_curso` (either party may cancel, subject to server rules). Once `finalizado` or `cancelado`, call `clearRide()` to return the store to `idle`.
+
+## Usage example
+
+After a successful call to the ride request endpoint, hydrate the store with the full ride object returned by the API:
+
+```typescript
+const { setActiveRide, setRideStatus, setDriver, clearRide } = useRideStore();
+
+// After API call to /api/viajes/solicitar succeeds:
+setActiveRide({
+  id: viaje.id,
+  status: 'solicitado',
+  originSectorId: 'centro',
+  originName: 'Centro de Crucita',
+  destinationSectorId: 'playa',
+  destinationName: 'Malecón / Playa',
+  price: 1.50,
+  estimatedDistanceKm: 1.2,
+  estimatedTimeMin: 5,
+  driver: null,
+  chatThreadId: null,
+  createdAt: new Date().toISOString(),
+});
+
+// When the Socket.io 'viaje:aceptado' event arrives:
+setDriver({
+  id: conductor.id,
+  nombre: conductor.nombre,
+  telefono: conductor.telefono,
+  placa: conductor.placa,
+  calificacion: conductor.calificacion,
+});
+
+// When the ride finishes:
+clearRide();
+```
+
+<Note>
+  `setDriver` automatically transitions the ride status to `'aceptado'` in the same atomic `set` call — do **not** call `setRideStatus('aceptado')` separately after `setDriver`, or you may trigger two renders with inconsistent state where `driver` is set but the status hasn't updated yet.
+</Note>

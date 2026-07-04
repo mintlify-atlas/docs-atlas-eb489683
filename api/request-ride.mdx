@@ -1,0 +1,107 @@
+---
+title: "POST /api/viajes/solicitar — request a tricimoto ride"
+sidebarTitle: "Request Ride"
+description: "Creates a new ride request in CruciDrive. Accepts origin and destination coordinates and returns a viaje record with a fixed tariff of $1.50."
+---
+
+Passengers call this endpoint to place a tricimoto ride request. The server accepts decimal coordinates for both the pickup and drop-off points, converts them to PostGIS `GEOGRAPHY(POINT)` format using WKT notation, and persists a new row in `public.viajes` with a status of `"solicitado"` and a fixed tariff of `$1.50`. Available conductors can then see the request and accept it.
+
+**Access:** requires the `pasajero` role. The route is protected by `authMiddleware` followed by `roleMiddleware(['pasajero'])`, which reads the caller's role from `public.perfiles` and rejects conductors or unauthenticated users.
+
+## Request
+
+<ParamField header="Authorization" type="string" required>
+  Bearer JWT from Supabase Auth. The authenticated user must have `rol = "pasajero"` in `public.perfiles`.
+</ParamField>
+
+<ParamField body="origen" type="object" required>
+  Pickup coordinates as a JSON object with `lat` (latitude) and `lng` (longitude) expressed as decimal numbers.
+</ParamField>
+
+<ParamField body="destino" type="object" required>
+  Drop-off coordinates as a JSON object with `lat` and `lng` expressed as decimal numbers.
+</ParamField>
+
+### Example request body
+
+```json
+{
+  "origen": { "lat": -1.0448, "lng": -80.5432 },
+  "destino": { "lat": -1.0470, "lng": -80.5485 }
+}
+```
+
+## Response `201`
+
+<ResponseField name="id" type="string">
+  Auto-generated UUID for the new ride record.
+</ResponseField>
+
+<ResponseField name="pasajero_id" type="string">
+  UUID of the passenger who requested the ride — sourced from `req.user.id`.
+</ResponseField>
+
+<ResponseField name="origen" type="string">
+  Pickup point stored as a WKT string, e.g. `"POINT(-80.5432 -1.0448)"`. Longitude is listed first per the WKT standard.
+</ResponseField>
+
+<ResponseField name="destino" type="string">
+  Drop-off point stored as a WKT string, e.g. `"POINT(-80.5485 -1.0470)"`.
+</ResponseField>
+
+<ResponseField name="estado" type="string">
+  Always `"solicitado"` on creation. Transitions to `"aceptado"` when a conductor claims the ride.
+</ResponseField>
+
+<ResponseField name="tarifa" type="number">
+  Fixed ride fare in USD. Always `1.50` at this time.
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  ISO 8601 timestamp set by the database at insert time.
+</ResponseField>
+
+## Error cases
+
+| HTTP status | Cause |
+|-------------|-------|
+| `400` | `origen` or `destino` is missing, or either object is missing `lat` / `lng` fields |
+| `400` | Database insert error — e.g. a foreign-key violation on `pasajero_id` |
+
+## Full curl example
+
+```bash
+curl -X POST https://api.crucidrive.local/api/viajes/solicitar \
+  -H "Authorization: Bearer <your_access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "origen": { "lat": -1.0448, "lng": -80.5432 },
+    "destino": { "lat": -1.0470, "lng": -80.5485 }
+  }'
+```
+
+```json
+{
+  "status": "success",
+  "message": "Viaje solicitado correctamente.",
+  "data": {
+    "id": "c3d4e5f6-0000-0000-0000-aabbccddeeff",
+    "pasajero_id": "a1b2c3d4-0000-0000-0000-111122223333",
+    "conductor_id": null,
+    "origen": "POINT(-80.5432 -1.0448)",
+    "destino": "POINT(-80.5485 -1.047)",
+    "estado": "solicitado",
+    "tarifa": 1.50,
+    "created_at": "2024-11-15T14:22:00.000Z",
+    "updated_at": null
+  }
+}
+```
+
+<Note>
+  The tariff is currently hardcoded at `$1.50` for all rides in Crucita. A future release will replace this with a dynamic, sector-based tariff grid that accounts for distance zones within the town.
+</Note>
+
+<Info>
+  Coordinates are stored as `POINT(lng lat)` — **longitude first**, then latitude — which is the WKT standard and what PostGIS `GEOGRAPHY` columns expect. This is the reverse of the `{ lat, lng }` order used in the request body. The conversion is handled automatically by the `toWKT(lng, lat)` utility before the DB insert.
+</Info>

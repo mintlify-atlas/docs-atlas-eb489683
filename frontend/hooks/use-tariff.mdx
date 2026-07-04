@@ -1,0 +1,117 @@
+---
+title: "useTariff — fare calculation hook for sector pairs"
+sidebarTitle: "useTariff"
+description: "Memoized React hook that looks up fixed pricing, distance, and estimated travel time between any two CruciDrive geographic sectors in Crucita."
+---
+
+`useTariff` uses the static `TARIFFS` lookup table defined in `src/constants/sectors.ts` to return formatted fare information between two sectors in Crucita. All results are memoized via `useMemo` and only recompute when either sector ID changes — making it safe to call on every render of the ride-request screen without performance concerns.
+
+## Signature
+
+```typescript
+import { useTariff } from '@/hooks/useTariff';
+
+const result = useTariff(
+  originSectorId: string | null,
+  destinationSectorId: string | null
+): TariffResult;
+```
+
+## Parameters
+
+<ParamField query="originSectorId" type="string | null" required>
+  The ID of the departure sector. Pass `null` when the user has not yet selected an origin. Valid values: `centro`, `playa`, `las_gilces`, `los_arenales`, `san_jacinto`.
+</ParamField>
+
+<ParamField query="destinationSectorId" type="string | null" required>
+  The ID of the destination sector. Pass `null` when the user has not yet selected a destination. Valid values: `centro`, `playa`, `las_gilces`, `los_arenales`, `san_jacinto`.
+</ParamField>
+
+## Return type
+
+```typescript
+interface TariffResult {
+  tariff:            TariffEntry | null;
+  originName:        string;
+  destinationName:   string;
+  formattedPrice:    string;
+  formattedTime:     string;
+  formattedDistance: string;
+}
+```
+
+| Field | Type | Example |
+|---|---|---|
+| `tariff` | `TariffEntry \| null` | Full tariff object, or `null` if no route exists between the two sectors |
+| `originName` | `string` | `"Centro de Crucita"` |
+| `destinationName` | `string` | `"Malecón / Playa"` |
+| `formattedPrice` | `string` | `"$1.50"` |
+| `formattedTime` | `string` | `"~5 min"` |
+| `formattedDistance` | `string` | `"1.2 km"` |
+
+## Available routes
+
+All ten routes in the `TARIFFS` table. Tariffs are bidirectional — the same entry is returned regardless of which sector is the origin and which is the destination.
+
+| Origin → Destination | Price | Distance | Time |
+|---|---|---|---|
+| Centro → Playa | $1.50 | 1.2 km | ~5 min |
+| Centro → Las Gilces | $2.00 | 2.0 km | ~8 min |
+| Centro → Los Arenales | $1.75 | 1.5 km | ~6 min |
+| Centro → San Jacinto | $2.40 | 3.2 km | ~10 min |
+| Playa → Las Gilces | $2.50 | 3.0 km | ~12 min |
+| Playa → Los Arenales | $1.50 | 1.0 km | ~4 min |
+| Playa → San Jacinto | $2.20 | 2.8 km | ~9 min |
+| Las Gilces → Los Arenales | $2.00 | 2.2 km | ~8 min |
+| Las Gilces → San Jacinto | $3.00 | 4.0 km | ~15 min |
+| Los Arenales → San Jacinto | $1.50 | 1.3 km | ~5 min |
+
+The lookup is performed by `findTariff(originId, destinationId)` from `sectors.ts`, which checks both orderings of the pair:
+
+```typescript
+TARIFFS.find(
+  (t) =>
+    (t.originId === originId && t.destinationId === destinationId) ||
+    (t.originId === destinationId && t.destinationId === originId)
+);
+```
+
+## Usage example
+
+```typescript
+import { useTariff } from '@/hooks/useTariff';
+
+const RideSummary = ({ origin, destination }) => {
+  const {
+    formattedPrice,
+    formattedTime,
+    formattedDistance,
+    tariff,
+  } = useTariff(origin, destination);
+
+  return (
+    <View>
+      <Text>{formattedPrice}</Text>       {/* "$1.50"  */}
+      <Text>{formattedTime}</Text>        {/* "~5 min" */}
+      <Text>{formattedDistance}</Text>    {/* "1.2 km" */}
+    </View>
+  );
+};
+```
+
+Passing `'centro'` and `'playa'` in either order yields the same result:
+
+```typescript
+const a = useTariff('centro', 'playa');
+const b = useTariff('playa', 'centro');
+
+a.formattedPrice === b.formattedPrice; // true → "$1.50"
+```
+
+<Note>
+  Tariffs are **bidirectional** — `useTariff('playa', 'centro')` returns exactly the same `TariffEntry` as `useTariff('centro', 'playa')`. This mirrors real-world tricimoto pricing in Crucita, where the fare is fixed per route regardless of direction.
+</Note>
+
+<Note>
+  If either `originSectorId` or `destinationSectorId` is `null`, the hook returns safe UI-ready defaults: `formattedPrice: "$0.00"`, `formattedTime: "--"`, `formattedDistance: "--"`, and `tariff: null`. This lets you render the fare card before the user has completed sector selection without adding null checks in every component.
+</Note>

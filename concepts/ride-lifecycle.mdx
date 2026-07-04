@@ -1,0 +1,164 @@
+---
+title: "Ride lifecycle: from request to completion in CruciDrive"
+sidebarTitle: "Ride Lifecycle"
+description: "A CruciDrive ride moves through five states — solicitado, aceptado, en_curso, finalizado, cancelado — with strict transition rules enforced server-side."
+---
+
+Every ride in CruciDrive follows a deterministic lifecycle enforced entirely on the server. The backend's `cambiarEstadoViaje` controller validates the current state of a ride before applying any transition, ensuring that no client — regardless of role — can skip a step or revert a completed ride. The `estado` column on the `viajes` table is constrained by a PostgreSQL `CHECK` to only accept the five valid values, adding a final database-level safeguard beneath the application logic.
+
+## Ride States
+
+| State | Who can trigger | Description |
+|---|---|---|
+| `solicitado` | `pasajero` | Ride has been requested; waiting for a driver to accept |
+| `aceptado` | `conductor` | Driver has accepted; a private chat thread is automatically created |
+| `en_curso` | `conductor` | Driver has started the trip; passengers are being transported |
+| `finalizado` | `conductor` | Trip has been completed successfully |
+| `cancelado` | `pasajero` or `conductor` | Ride was cancelled before or during transit (not applicable once `finalizado`) |
+
+## State Transition Rules
+
+The `cambiarEstadoViaje` controller applies three hard guards before writing any state change to the database. These guards are checked in order and return a `400 Bad Request` if violated:
+
+```js
+// en_curso requires the ride to currently be in 'aceptado'
+if (estado === 'en_curso' && viaje.estado !== 'aceptado') {
+  return errorResponse(res, 400, 'El viaje debe estar "aceptado" antes de iniciar ("en_curso").');
+}
+
+// finalizado requires the ride to currently be in 'en_curso'
+if (estado === 'finalizado' && viaje.estado !== 'en_curso') {
+  return errorResponse(res, 400, 'El viaje debe estar "en_curso" antes de finalizar.');
+}
+
+// cancelado cannot be applied to a ride that is already finalizado or cancelado
+if (estado === 'cancelado' && ['finalizado', 'cancelado'].includes(viaje.estado)) {
+  return errorResponse(res, 400, `No se puede cancelar un viaje que ya está ${viaje.estado}.`);
+}
+```
+
+An additional ownership check runs before the state guards: both `pasajero_id` and `conductor_id` are compared against `req.user.id`, so only the two participants of a specific ride can change its state.
+
+## State machine
+
+```
+idle → solicitado → aceptado → en_curso → finalizado
+                  ↘           ↘          ↗
+                  cancelado ←──────────────
+```
+
+The `idle` state is a frontend-only concept used by the `useRideStore` Zustand store to represent the pre-request UI. It has no corresponding database row.
+
+## Ride creation — solicitarViaje
+
+A `pasajero` calls `POST /api/viajes/solicitar` with `origen` and `destino` coordinate objects. The backend validates that both `lat` and `lng` are present, converts them to PostGIS Well-Known Text via the `toWKT` utility, and inserts a new row into `viajes` with a fixed fare of **$1.50**:
+
+```js
+const solicitarViaje = asyncHandler(async (req, res) => {
+  const { origen, destino } = req.body;
+  const pasajeroId = req.user.id;
+
+  const tarifa = 1.50;
+
+  const { data: viaje, error } = await supabase
+    .from('viajes')
+    .insert([
+      {
+        pasajero_id: pasajeroId,
+        origen: toWKT(origen.lng, origen.lat),
+        destino: toWKT(destino.lng, destino.lat),
+        estado: 'solicitado',
+        tarifa
+      }
+    ])
+    .select()
+    .single();
+
+  if (error) {
+    return errorResponse(res, 400, 'Error al registrar la solicitud del viaje.', error.message);
+  }
+
+  successResponse(res, viaje, 'Viaje solicitado correctamente.', 201);
+});
+```
+
+## Ride acceptance — aceptarViaje
+
+Accepting a ride is a multi-step transactional flow. The backend first verifies the ride is still in `solicitado` state, then performs three sequential writes with rollback logic at each step:
+
+<Steps>
+  <Step title="Update ride to aceptado">
+    The `viajes` row is updated with `conductor_id` and `estado: 'aceptado'`.
+  </Step>
+  <Step title="Create chat thread">
+    A new row is inserted into `threads` with the `viaje_id`. If this insert fails, the ride is rolled back to `solicitado` and the conductor assignment is cleared.
+  </Step>
+  <Step title="Insert thread members">
+    Two rows are inserted into `thread_members` — one for `pasajero_id` and one for `conductor_id`. If this fails, the thread is deleted and the ride is rolled back to `solicitado`.
+  </Step>
+</Steps>
+
+```js
+const { data: thread, error: threadError } = await supabase
+  .from('threads')
+  .insert([{ viaje_id: viajeId }])
+  .select()
+  .single();
+
+if (threadError) {
+  // Rollback: revert ride to solicitado
+  await supabase.from('viajes').update({ conductor_id: null, estado: 'solicitado' }).eq('id', viajeId);
+  return errorResponse(res, 500, 'Error al inicializar el hilo de comunicación del viaje.', threadError.message);
+}
+
+const miembros = [
+  { thread_id: thread.id, user_id: viaje.pasajero_id },
+  { thread_id: thread.id, user_id: conductorId }
+];
+
+const { error: membersError } = await supabase
+  .from('thread_members')
+  .insert(miembros);
+
+if (membersError) {
+  // Rollback: delete thread and revert ride
+  await supabase.from('threads').delete().eq('id', thread.id);
+  await supabase.from('viajes').update({ conductor_id: null, estado: 'solicitado' }).eq('id', viajeId);
+  return errorResponse(res, 500, 'Error al registrar los participantes en el chat del viaje.', membersError.message);
+}
+```
+
+<Tip>
+The private chat thread is created atomically during the `aceptado` transition — not when the chat screen opens. This means both participants can immediately send messages the moment the driver accepts, without any extra initialization step on the client.
+</Tip>
+
+## Frontend state — RideStore
+
+The React Native frontend mirrors the backend state enum through the `useRideStore` Zustand store. The `RideStatus` type adds an `idle` state for the pre-request UI:
+
+```ts
+export type RideStatus =
+  | 'idle'
+  | 'solicitado'
+  | 'aceptado'
+  | 'en_curso'
+  | 'finalizado'
+  | 'cancelado';
+```
+
+The store exposes granular actions so components only update the slice of state they own:
+
+<CardGroup cols={2}>
+  <Card title="setRideStatus" icon="arrow-right-arrow-left">
+    Updates only the `status` field of the active ride. Used by Socket.io event handlers when the server broadcasts a state change.
+  </Card>
+  <Card title="setDriver" icon="user">
+    Assigns `DriverInfo` to the active ride and automatically sets `status` to `'aceptado'`. Called when a conductor accepts the ride.
+  </Card>
+  <Card title="updateRide" icon="pen">
+    Applies a partial update (`Partial<ActiveRide>`) to the active ride. Useful for updating `chatThreadId` after acceptance.
+  </Card>
+  <Card title="clearRide" icon="trash">
+    Resets `activeRide` to `null` and `isRequesting` to `false`. Called on `finalizado` or `cancelado` to return the UI to `idle`.
+  </Card>
+</CardGroup>

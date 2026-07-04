@@ -1,0 +1,211 @@
+---
+title: "CruciDrive Glassmorphic design system tokens"
+sidebarTitle: "Design System"
+description: "Full reference for CruciDrive's design tokens: brand colors, glassmorphic backgrounds, typography with Outfit/Inter fonts, spacing, border radii, and animation constants."
+---
+
+CruciDrive's design system is inspired by the ocean light and coastal atmosphere of Crucita. All tokens live in `src/constants/theme.ts` and implement a Glassmorphism visual language — translucent cards, backdrop blur, and subtle glass borders floating over interactive maps. The system is the single source of truth referenced by every component; never hard-code a hex value or pixel measurement that belongs to a token.
+
+## Color Palette
+
+Brand colors derive from the natural palette of the Crucita coastline: teal from the Pacific, amber from the coastal sunset, and a deep navy for the night-mode canvas.
+
+| Token | Hex | Usage |
+|---|---|---|
+| `primary` | `#0D9488` | Brand teal — primary buttons, active states, focus rings |
+| `primaryLight` | `#14B8A6` | Hover states, lighter accent variant of brand teal |
+| `secondary` | `#F59E0B` | CTAs, price badges, sunset-amber highlights |
+| `secondaryLight` | `#FBBF24` | Secondary accent variant |
+| `danger` | `#EF4444` | Panic button, validation errors, cancel actions |
+| `dangerLight` | `#F87171` | Danger hover and activated-panic state |
+| `success` | `#10B981` | Available status indicator, success toasts |
+| `successLight` | `#34D399` | Success accent, online driver ring |
+| `darkBg` | `#0B0F19` | App dark mode background canvas |
+| `lightBg` | `#F8FAFC` | Light mode background |
+| `glassTextDark` | `#F1F5F9` | Primary text on dark glass surfaces |
+| `glassTextLight` | `#0F172A` | Primary text on light glass surfaces |
+| `glassTextMutedDark` | `#94A3B8` | Secondary/muted text on dark glass |
+| `glassTextMutedLight` | `#64748B` | Secondary/muted text on light glass |
+
+## Glassmorphic Tokens
+
+These four values define the translucent material used by every glass component. They are split by color mode so components can switch cleanly between dark and light contexts without hard-coding RGBA values inline.
+
+| Token | Value | Usage |
+|---|---|---|
+| `glassBgDark` | `rgba(255, 255, 255, 0.07)` | Dark-mode card background — white at 7% opacity creates the frosted-glass feel |
+| `glassBgLight` | `rgba(15, 23, 42, 0.04)` | Light-mode card background — navy at 4% opacity for a subtle tint |
+| `glassBorderDark` | `rgba(255, 255, 255, 0.12)` | Dark-mode glass border — mimics light reflecting off glass edges |
+| `glassBorderLight` | `rgba(15, 23, 42, 0.08)` | Light-mode glass border — a soft navy-tinted line |
+
+## Typography
+
+Two typefaces are used throughout the app, loaded via `expo-google-fonts`:
+
+```typescript
+export const FONTS = {
+  heading: 'Outfit',   // titles, button labels, price displays
+  body: 'Inter',       // body copy, input fields, helper text
+
+  sizes: {
+    xs: 12,      // captions, timestamps
+    sm: 14,      // labels, helper text
+    base: 16,    // standard body text
+    lg: 18,      // card titles
+    xl: 20,      // section headings
+    xxl: 24,     // modal headings
+    title: 32,   // screen titles
+    display: 40, // highlighted fares
+  },
+
+  weights: {
+    regular: '400',
+    medium: '500',
+    semibold: '600',
+    bold: '700',
+  },
+
+  lineHeights: {
+    tight: 1.2,    // headings
+    normal: 1.5,   // body
+    relaxed: 1.75, // descriptive text
+  },
+};
+```
+
+`Outfit` is used exclusively for headings and button labels to give the UI a friendly, rounded personality. `Inter` is used everywhere else for its superior legibility at small sizes on OLED screens.
+
+## Spacing System
+
+All spacing follows a 4 dp / 8 dp grid. Never use arbitrary pixel values — pick the closest token.
+
+```typescript
+export const SPACING = {
+  xs:  4,   // micro gaps, icon padding
+  sm:  8,   // internal component padding
+  md:  16,  // standard card padding, section gaps
+  lg:  24,  // between distinct UI sections
+  xl:  32,  // section margins
+  xxl: 48,  // top-level block separation
+};
+```
+
+## Shapes
+
+Border radii create the organic, coastal feel that distinguishes CruciDrive from utilitarian map apps:
+
+```typescript
+export const SHAPES = {
+  borderRadiusSm:   8,    // inputs, chips, small badges
+  borderRadiusMd:   16,   // cards, modals, bottom sheets
+  borderRadiusLg:   24,   // bottom sheet handles, large panels
+  borderRadiusFull: 9999, // pills, avatar bubbles, FABs
+
+  glassBorderWidth: 1,    // uniform border thickness across all glass surfaces
+};
+```
+
+## Effects
+
+### Shadows
+
+Two shadow presets match the ambient light conditions of the dark and light themes:
+
+```typescript
+export const EFFECTS = {
+  blurIntensity: 20,
+
+  shadowLight: {
+    shadowColor: 'rgba(31, 38, 135, 0.08)',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 1,
+    shadowRadius: 32,
+    elevation: 8,
+  },
+
+  shadowDark: {
+    shadowColor: 'rgba(0, 0, 0, 0.37)',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 1,
+    shadowRadius: 32,
+    elevation: 12,
+  },
+};
+```
+
+`shadowLight` uses a deep-indigo tint at low opacity to simulate the soft, diffused shadows found in material design for light interfaces. `shadowDark` uses near-black at higher opacity for more dramatic depth on the dark canvas.
+
+`blurIntensity: 20` is the default value passed to `expo-blur`'s `BlurView` component and represents a deliberately moderate blur — enough to create depth without obscuring the map beneath.
+
+## Animation Constants
+
+All motion in CruciDrive is driven by these constants. Never hard-code durations or spring params in component files.
+
+```typescript
+export const ANIMATION = {
+  pressScale: 0.97,       // scale target on tap (GlassButton, interactive cards)
+
+  durationFast:   150,    // micro-interactions: border color change, icon swap
+  durationNormal: 250,    // standard transitions: slide-in, fade
+  durationSlow:   400,    // complex transitions: bottom sheet open/close
+
+  easingEnter: 'easeOut', // elements entering the screen
+  easingExit:  'easeIn',  // elements leaving the screen
+
+  spring: {
+    damping:   15,
+    stiffness: 150,
+    mass:      1,
+  },
+
+  panicHoldDuration:  2000,  // ms the SOS button must be held to fire
+  rideAcceptTimeout:  15000, // ms before an unanswered ride request auto-expires
+};
+```
+
+The `spring` configuration is shared by `GlassButton` and any component that uses `withSpring` from `react-native-reanimated`. It produces a natural, slightly bouncy settle that avoids the mechanical feel of linear easing.
+
+`panicHoldDuration` of 2 000 ms is intentional — it prevents accidental SOS activations during normal ride usage while still being short enough to be effective in an emergency. `rideAcceptTimeout` of 15 000 ms matches the server-side TTL on pending ride requests in `viajes`.
+
+## Z-Index Scale
+
+All positional layering must use these tokens. Never write a bare `zIndex` number in a component stylesheet.
+
+```typescript
+export const Z_INDEX = {
+  base:        0,    // map tiles and base content
+  card:        10,   // GlassCard, elevated content
+  searchBar:   20,   // floating destination search bar
+  bottomSheet: 40,   // ride info bottom sheet
+  panicButton: 50,   // SOS button (always above bottom sheet)
+  modal:       100,  // ride request modal, alerts
+  toast:       1000, // toast / snackbar notifications
+};
+```
+
+The large jump from `modal: 100` to `toast: 1000` ensures that toast notifications are always legible regardless of how many modals are stacked.
+
+## Implementation Guidelines
+
+Rules distilled from `DESIGN.md v1.0.0` that every contributor must follow:
+
+- **Use `BlurView` from `expo-blur`** for all blur effects — never CSS `backdrop-filter`. On iOS and Android, CSS blur filters are not supported natively without the Expo SDK.
+- **Never stack multiple glass layers.** A glass modal on top of a glass card on top of a glass bar degrades GPU performance and makes the UI illegible. Each screen should have at most one active glass layer in the foreground.
+- **Maintain high text contrast.** Use `COLORS.glassTextDark` (`#F1F5F9`) on dark glass and `COLORS.glassTextLight` (`#0F172A`) on light glass. Never use `font-light` weight on translucent backgrounds — it fails readability checks in direct sunlight.
+- **Use `react-native-reanimated` for all animations.** The built-in `Animated` API from React Native core is not permitted. All shared values, animated styles, and gestures must go through Reanimated v3.
+
+### Standard Glassmorphic container pattern
+
+```typescript
+// Standard glass card using tokens
+<BlurView intensity={EFFECTS.blurIntensity} style={{
+  backgroundColor: COLORS.glassBgDark,
+  borderColor: COLORS.glassBorderDark,
+  borderWidth: SHAPES.glassBorderWidth,
+  borderRadius: SHAPES.borderRadiusMd,
+}}>
+  {children}
+</BlurView>
+```
+
+In practice, use the `GlassCard` component instead of composing this pattern manually — it applies the same tokens plus the correct shadow and overflow clipping. Reserve raw `BlurView` usage for cases where you need blur without any border or shadow, such as full-screen overlays.

@@ -1,0 +1,391 @@
+---
+title: "Reusable UI components in the CruciDrive design system"
+sidebarTitle: "Components"
+description: "Reference for CruciDrive's shared UI components: GlassCard, GlassButton, GlassInput, BlurContainer, PanicButton, LoadingSpinner, and Map."
+---
+
+CruciDrive exports a set of pre-built Glassmorphic components from `src/components/index.ts`. All components consume design tokens from `theme.ts` and use `expo-blur` for backdrop blur effects. Importing from the barrel export guarantees you always get the platform-correct variant — on web, `Map` resolves to `Map.web.tsx` automatically via the Metro bundler's platform extension resolution.
+
+---
+
+## GlassCard
+
+A translucent card container with backdrop blur, a glass border, and a soft diffuse shadow. It is the primary surface for ride info panels, driver cards, and any content that floats above the map.
+
+### Props
+
+<ParamField body="blurIntensity" type="number" default="20">
+  Intensity of the `expo-blur` `BlurView` effect, on a scale of 0–100. Defaults to `EFFECTS.blurIntensity` from the theme.
+</ParamField>
+
+<ParamField body="variant" type="'default' | 'highlight' | 'danger'" default="'default'">
+  Controls the border color. `default` uses the standard glass border (`rgba(255,255,255,0.12)`), `highlight` uses `COLORS.primaryLight` (teal), and `danger` uses `COLORS.danger` (red) for error or emergency states.
+</ParamField>
+
+<ParamField body="borderRadius" type="number" default="16">
+  Corner radius in dp. Defaults to `SHAPES.borderRadiusMd`.
+</ParamField>
+
+<ParamField body="noPadding" type="boolean" default="false">
+  When `true`, removes the default 16dp internal padding. Use this when you want to compose custom padding from within the card's children.
+</ParamField>
+
+<ParamField body="style" type="ViewStyle">
+  Additional styles applied to the outer `View` container (not the `BlurView`). Use this for `flex`, `width`, `margin` etc.
+</ParamField>
+
+### Usage
+
+```tsx
+import { GlassCard } from '@/components';
+import { Text } from 'react-native';
+
+// Default glass card
+<GlassCard>
+  <Text style={{ color: '#F1F5F9' }}>Malecón / Playa</Text>
+  <Text style={{ color: '#F59E0B', fontSize: 32 }}>$1.50</Text>
+</GlassCard>
+
+// Highlighted variant for active selection
+<GlassCard variant="highlight" borderRadius={24}>
+  <Text>Centro de Crucita</Text>
+</GlassCard>
+
+// Danger variant for cancellation confirmation
+<GlassCard variant="danger" noPadding>
+  <CancelRideSheet />
+</GlassCard>
+```
+
+---
+
+## GlassButton
+
+A pressable button with a press-scale animation (`0.97`) driven by `react-native-reanimated` and `react-native-gesture-handler`. Supports four visual variants, three size presets, a loading state that swaps the label for an `ActivityIndicator`, and an optional left icon slot.
+
+### Props
+
+<ParamField body="label" type="string" required>
+  The text rendered inside the button. Also used as the `accessibilityLabel`.
+</ParamField>
+
+<ParamField body="onPress" type="() => void" required>
+  Callback fired when the tap gesture completes successfully.
+</ParamField>
+
+<ParamField body="variant" type="'primary' | 'secondary' | 'danger' | 'ghost'" default="'primary'">
+  Visual style. `primary` → teal background; `secondary` → amber background; `danger` → red background; `ghost` → transparent with glass border.
+</ParamField>
+
+<ParamField body="size" type="'sm' | 'md' | 'lg'" default="'md'">
+  Button height and horizontal padding. `sm` = 40dp height, `md` = 48dp, `lg` = 56dp.
+</ParamField>
+
+<ParamField body="disabled" type="boolean" default="false">
+  When `true`, the button renders at 40% opacity and the gesture is blocked.
+</ParamField>
+
+<ParamField body="loading" type="boolean" default="false">
+  When `true`, the label is replaced with an `ActivityIndicator` and the gesture is blocked.
+</ParamField>
+
+<ParamField body="leftIcon" type="React.ReactNode">
+  Optional React element rendered to the left of the label (e.g. an `Ionicons` icon).
+</ParamField>
+
+<ParamField body="style" type="ViewStyle">
+  Additional styles applied to the animated container.
+</ParamField>
+
+### Usage
+
+```tsx
+import { GlassButton } from '@/components';
+import { Ionicons } from '@expo/vector-icons';
+
+// Primary CTA
+<GlassButton
+  label="Solicitar Tricimoto"
+  onPress={handleRequest}
+  variant="primary"
+  size="lg"
+/>
+
+// Secondary amber button
+<GlassButton
+  label="Ver tarifa"
+  onPress={handleViewFare}
+  variant="secondary"
+  leftIcon={<Ionicons name="pricetag" size={16} color="#0B0F19" />}
+/>
+
+// Danger with loading state
+<GlassButton
+  label="Cancelar viaje"
+  onPress={handleCancel}
+  variant="danger"
+  loading={isCancelling}
+/>
+
+// Ghost button
+<GlassButton
+  label="Más información"
+  onPress={handleInfo}
+  variant="ghost"
+  size="sm"
+/>
+```
+
+---
+
+## GlassInput
+
+A text input field with a glass background, an animated border that transitions to `COLORS.primaryLight` on focus and `COLORS.danger` on validation error, and a persistent visible label above the field. The border animation uses `withTiming` from Reanimated at `ANIMATION.durationFast` (150 ms).
+
+### Props
+
+<ParamField body="label" type="string" required>
+  Visible label rendered above the input. Used as `accessibilityLabel`. Do not rely on `placeholder` alone for accessibility.
+</ParamField>
+
+<ParamField body="error" type="string">
+  When provided, the border turns red and this string is displayed below the input as an error message with `accessibilityRole="alert"`.
+</ParamField>
+
+<ParamField body="helperText" type="string">
+  Displayed below the input in muted text when there is no error. Useful for format hints.
+</ParamField>
+
+<ParamField body="required" type="boolean" default="false">
+  Appends a red asterisk (`*`) to the label.
+</ParamField>
+
+<ParamField body="containerStyle" type="ViewStyle">
+  Additional styles for the outermost `View` wrapper.
+</ParamField>
+
+All other props are forwarded to the underlying React Native `TextInput` component.
+
+### Usage
+
+```tsx
+import { GlassInput } from '@/components';
+
+// Phone number field
+<GlassInput
+  label="Número de teléfono"
+  placeholder="+593 99 123 4567"
+  keyboardType="phone-pad"
+  required
+  error={errors.telefono}
+/>
+
+// OTP code entry
+<GlassInput
+  label="Código de verificación"
+  placeholder="123456"
+  keyboardType="number-pad"
+  maxLength={6}
+  helperText="Revisa tu SMS"
+/>
+```
+
+---
+
+## BlurContainer
+
+A generic wrapper around `expo-blur`'s `BlurView` that fills its parent with a backdrop blur effect. Unlike `GlassCard`, `BlurContainer` adds no border or shadow — it is a pure blur layer for composing overlays, transparent headers, or full-screen loading backdrops.
+
+### Props
+
+<ParamField body="intensity" type="number" default="20">
+  Blur intensity (0–100). Defaults to `EFFECTS.blurIntensity`.
+</ParamField>
+
+<ParamField body="tint" type="'dark' | 'light' | 'default'" default="'dark'">
+  Color tint applied to the blur layer. `dark` adds a slight dark overlay; `light` adds a slight white overlay; `default` is neutral.
+</ParamField>
+
+<ParamField body="transparent" type="boolean" default="false">
+  When `false` (the default), `COLORS.glassBgDark` is applied as a base background beneath the blur. Set to `true` to strip the base fill for fully transparent composition.
+</ParamField>
+
+<ParamField body="style" type="ViewStyle">
+  Styles applied to the outer container `View`.
+</ParamField>
+
+### Usage
+
+```tsx
+import { BlurContainer } from '@/components';
+import { MapView } from './Map';
+
+// Blurred overlay on top of the map
+<View style={{ flex: 1 }}>
+  <MapView style={StyleSheet.absoluteFill} />
+  <BlurContainer
+    intensity={30}
+    style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 200 }}
+  >
+    <RideInfoContent />
+  </BlurContainer>
+</View>
+```
+
+---
+
+## PanicButton
+
+The SOS emergency button, rendered as a fixed floating circle in the bottom-left corner of the screen (`zIndex: Z_INDEX.panicButton = 50`). It features three concentric sonar-pulse rings that animate continuously using `withRepeat` + `withTiming` in Reanimated, each offset by 500 ms to create a staggered wave effect. Activation requires the user to hold the button for `ANIMATION.panicHoldDuration` (2 000 ms) using a `Gesture.LongPress` gesture — this prevents accidental triggers during normal app usage.
+
+### Props
+
+<ParamField body="onActivate" type="() => void" required>
+  Callback fired after the 2-second hold completes successfully. Use this to dispatch the emergency API call and notify contacts.
+</ParamField>
+
+<ParamField body="isActivated" type="boolean" default="false">
+  When `true`, the button background transitions to `COLORS.dangerLight` and the icon switches from `alert-outline` to `alert` to confirm the SOS has been triggered.
+</ParamField>
+
+<ParamField body="disabled" type="boolean" default="false">
+  When `true`, the long-press gesture is disabled entirely.
+</ParamField>
+
+### Pulse animation
+
+Three rings (`ring1`, `ring2`, `ring3`) each start at `scale: 1, opacity: 0.5` and animate to `scale: 2.5, opacity: 0` over 1 500 ms with staggered delays of 0, 500, and 1 000 ms respectively. The animation loops infinitely. On unmount, all animations are cancelled and shared values are reset to their initial state.
+
+```tsx
+import { PanicButton } from '@/components';
+
+<PanicButton
+  onActivate={async () => {
+    await sendEmergencyAlert({ coords, userId });
+  }}
+  isActivated={panicActivated}
+/>
+```
+
+<Warning>
+  The `PanicButton` triggers emergency protocols, including location broadcasting and driver/admin alerts. Only render it inside authenticated `pasajero` or `conductor` screens. Never display it on the login, splash, or onboarding screens.
+</Warning>
+
+---
+
+## LoadingSpinner
+
+An animated loading indicator that combines a continuous 360° rotation with a gentle scale pulse, both driven by `react-native-reanimated`. Rotation completes every 1 200 ms using `Easing.linear`; the pulse scales between `1.0` and `1.1` every 800 ms with reversal. Optionally renders over a full-screen dark overlay.
+
+### Props
+
+<ParamField body="size" type="number" default="48">
+  Diameter of the spinner circle in dp.
+</ParamField>
+
+<ParamField body="color" type="string" default="COLORS.primaryLight">
+  Color of the active arc on the spinner ring. Defaults to the brand teal `#14B8A6`.
+</ParamField>
+
+<ParamField body="message" type="string">
+  Optional loading message displayed below the spinner in `COLORS.glassTextMutedDark`.
+</ParamField>
+
+<ParamField body="overlay" type="boolean" default="false">
+  When `true`, the spinner is rendered inside a full-screen `View` with `backgroundColor: 'rgba(11, 15, 25, 0.7)'` and `zIndex: 100`. Use this for blocking full-screen loading states.
+</ParamField>
+
+### Usage
+
+```tsx
+import { LoadingSpinner } from '@/components';
+
+// Inline spinner in a card
+<LoadingSpinner message="Buscando conductor..." />
+
+// Full-screen blocking overlay
+{isRequestingRide && (
+  <LoadingSpinner
+    overlay
+    message="Conectando con un conductor..."
+    size={64}
+  />
+)}
+```
+
+---
+
+## Map
+
+The `Map` component wraps `react-native-maps`'s `MapView` and re-exports `Marker`, `PROVIDER_GOOGLE`, and the `Region` type. The native variant (`Map.tsx`) uses Google Maps as the tile provider. The web variant (`Map.web.tsx`) renders a placeholder `View` with a fallback message, since `react-native-maps` is not supported in the web preview environment.
+
+Metro's platform extension resolution (`Map.web.tsx` takes precedence over `Map.tsx` on web) means you can import from the same path on all platforms without any conditional logic.
+
+### Re-exports from `Map.tsx`
+
+```typescript
+import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
+
+export { Marker, PROVIDER_GOOGLE, type Region };
+export default MapView;
+```
+
+### Usage with driver markers
+
+```tsx
+import MapView, { Marker, Region } from '@/components/Map';
+import { useLocationStore } from '@/store/useLocationStore';
+import { COLORS } from '@/constants/theme';
+
+const CRUCITA_REGION: Region = {
+  latitude: -0.9167,
+  longitude: -80.4167,
+  latitudeDelta: 0.025,
+  longitudeDelta: 0.025,
+};
+
+export function RideMap() {
+  const nearbyDrivers = useLocationStore((s) => s.nearbyDrivers);
+  const userCoords = useLocationStore((s) => s.userCoords);
+
+  return (
+    <MapView
+      style={{ flex: 1 }}
+      provider={PROVIDER_GOOGLE}
+      initialRegion={CRUCITA_REGION}
+      showsUserLocation
+    >
+      {[...nearbyDrivers.values()].map((driver) => (
+        <Marker
+          key={driver.conductorId}
+          coordinate={{ latitude: driver.coords.lat, longitude: driver.coords.lng }}
+          title={driver.nombre}
+          description={driver.estado}
+          pinColor={
+            driver.estado === 'disponible' ? COLORS.success : COLORS.secondary
+          }
+        />
+      ))}
+    </MapView>
+  );
+}
+```
+
+---
+
+## Exports
+
+The full barrel export from `src/components/index.ts`:
+
+```typescript
+export { GlassButton } from './GlassButton';
+export { GlassCard } from './GlassCard';
+export { GlassInput } from './GlassInput';
+export { BlurContainer } from './BlurContainer';
+export { PanicButton } from './PanicButton';
+export { LoadingSpinner } from './LoadingSpinner';
+```
+
+<Note>
+  `Map` is not included in the barrel export because it is a default export. Import it directly: `import MapView, { Marker, Region } from '@/components/Map'`. The web fallback (`Map.web.tsx`) is resolved automatically by Metro — no manual platform branching required.
+</Note>

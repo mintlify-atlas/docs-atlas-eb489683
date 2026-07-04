@@ -1,0 +1,183 @@
+---
+title: "useLocation and useMapRegion — GPS and map hooks"
+sidebarTitle: "useLocation"
+description: "React hooks for requesting device GPS permissions, reading real-time coordinates, and computing the visible map region from the current driver or passenger position."
+---
+
+CruciDrive uses two complementary location-related hooks. `useLocation` manages `expo-location` permissions and returns the device's current GPS coordinates — optionally enabling continuous tracking for the driver console. `useMapRegion` takes those coordinates and computes a `MapRegion` object compatible with `react-native-maps`, falling back to the default Crucita region when GPS is unavailable.
+
+<Note>
+  `expo-location` permissions must be declared in `app.json`. CruciDrive registers both foreground and background location permissions under the `expo-location` plugin, with Spanish-language permission strings shown to the user on iOS and Android.
+</Note>
+
+## `useLocation`
+
+`useLocation` wraps `expo-location` to handle the full permissions + position lifecycle. It stores coordinates and the detected sector in the Zustand `useLocationStore`, making the last known position available app-wide without prop-drilling.
+
+### Signature
+
+```typescript
+import { useLocation } from '@/hooks/useLocation';
+
+const {
+  userCoords,
+  currentSectorId,
+  hasPermission,
+  isTracking,
+  requestPermissions,
+  requestBackgroundPermissions,
+  getCurrentPosition,
+  startTracking,
+  stopTracking,
+} = useLocation(enableTracking?: boolean);
+```
+
+<ParamField query="enableTracking" type="boolean" default="false">
+  When `true`, the hook automatically calls `startTracking()` on mount and stops the watch subscription on unmount. Set to `true` on the driver console screen; leave `false` (default) on the passenger map to use one-shot position reads instead.
+</ParamField>
+
+### Return values
+
+| Property | Type | Description |
+|---|---|---|
+| `userCoords` | `{ lat: number; lng: number } \| null` | Most recent GPS coordinates from the Zustand location store |
+| `currentSectorId` | `string \| null` | ID of the Crucita sector nearest to `userCoords`, computed by `findNearestSector` |
+| `hasPermission` | `boolean` | Whether foreground location permission has been granted |
+| `isTracking` | `boolean` | `true` while a `watchPositionAsync` subscription is active |
+| `requestPermissions` | `() => Promise<boolean>` | Requests foreground location permission; returns `true` if granted |
+| `requestBackgroundPermissions` | `() => Promise<boolean>` | Requests background location permission — required for driver tracking when the app is backgrounded |
+| `getCurrentPosition` | `() => Promise<{ lat: number; lng: number } \| null>` | Reads the current position once using `Location.getCurrentPositionAsync()` |
+| `startTracking` | `() => Promise<void>` | Starts a `watchPositionAsync` subscription with the configured interval and distance filter |
+| `stopTracking` | `() => void` | Removes the watch subscription and sets `isTracking` to `false` |
+
+### How tracking works
+
+When `startTracking()` is called, it creates a `Location.watchPositionAsync` subscription using the values from `LOCATION_CONFIG`:
+
+```typescript
+const subscription = await Location.watchPositionAsync(
+  {
+    accuracy:         Location.Accuracy.Balanced,
+    timeInterval:     LOCATION_CONFIG.driverUpdateIntervalMs, // 5 000 ms
+    distanceInterval: LOCATION_CONFIG.distanceFilterMeters,   // 10 m
+  },
+  (location) => {
+    const coords = { lat: location.coords.latitude, lng: location.coords.longitude };
+    setUserCoords(coords);
+    const nearestSector = findNearestSector(coords.lat, coords.lng);
+    setCurrentSector(nearestSector.id);
+  }
+);
+```
+
+Each GPS update also runs `findNearestSector`, which uses a Euclidean distance comparison across the five Crucita sectors to determine which sector the driver is currently in.
+
+---
+
+## `useMapRegion`
+
+`useMapRegion` is a thin memoization wrapper that converts a `Coordinates` object (or `null`) into the `MapRegion` shape expected by `react-native-maps`' `<MapView region={...} />` prop.
+
+### Signature
+
+```typescript
+import { useMapRegion } from '@/hooks/useMapRegion';
+
+const region = useMapRegion(userCoords: Coordinates | null): MapRegion;
+```
+
+<ParamField query="userCoords" type="Coordinates | null" required>
+  The `{ lat, lng }` object from `useLocation`. Pass `null` to fall back to the default Crucita region.
+</ParamField>
+
+### Return type
+
+```typescript
+interface MapRegion {
+  latitude:       number;
+  longitude:      number;
+  latitudeDelta:  number;
+  longitudeDelta: number;
+}
+```
+
+When `userCoords` is `null` — GPS denied or not yet resolved — the hook returns `LOCATION_CONFIG.defaultRegion`, centring the map on Crucita:
+
+```typescript
+{
+  latitude:       -1.0448,
+  longitude:      -80.5432,
+  latitudeDelta:   0.02,
+  longitudeDelta:  0.02,
+}
+```
+
+The result is memoized via `useMemo` and only recomputes when `userCoords` changes, preventing unnecessary `<MapView>` re-renders.
+
+---
+
+## Location config constants
+
+Both hooks are governed by the `LOCATION_CONFIG` object in `src/constants/config.ts`:
+
+| Constant | Value | Effect |
+|---|---|---|
+| `driverUpdateIntervalMs` | `5000` | Drivers push a GPS update to the server every 5 seconds |
+| `distanceFilterMeters` | `10` | A GPS event is only emitted after the device has moved at least 10 metres |
+| `defaultRegion.latitude` | `-1.0448` | Map fallback latitude — Crucita town centre |
+| `defaultRegion.longitude` | `-80.5432` | Map fallback longitude — Crucita town centre |
+| `defaultRegion.latitudeDelta` | `0.02` | ~2.2 km vertical map span |
+| `defaultRegion.longitudeDelta` | `0.02` | ~2.2 km horizontal map span |
+
+---
+
+## Usage — passenger map screen
+
+For passengers, a single position read on mount is sufficient. `enableTracking` stays `false`:
+
+```typescript
+import { useLocation } from '@/hooks/useLocation';
+import { useMapRegion } from '@/hooks/useMapRegion';
+import MapView from 'react-native-maps';
+
+const PassengerMapScreen = () => {
+  const { userCoords, currentSectorId } = useLocation();
+  const region = useMapRegion(userCoords);
+
+  return <MapView region={region} />;
+};
+```
+
+## Usage — driver console screen
+
+Drivers need continuous tracking so their position is broadcast to nearby passengers:
+
+```typescript
+import { useLocation } from '@/hooks/useLocation';
+import { useMapRegion } from '@/hooks/useMapRegion';
+import { useSocket } from '@/hooks/useSocket';
+import { LOCATION_CONFIG } from '@/constants/config';
+
+const DriverConsoleScreen = () => {
+  // enableTracking: true starts watchPositionAsync automatically
+  const { userCoords, currentSectorId } = useLocation(true);
+  const region = useMapRegion(userCoords);
+  const { updateLocation } = useSocket();
+
+  useEffect(() => {
+    if (!userCoords || !currentSectorId) return;
+
+    const interval = setInterval(() => {
+      updateLocation(currentSectorId, userCoords, 'disponible');
+    }, LOCATION_CONFIG.driverUpdateIntervalMs);
+
+    return () => clearInterval(interval);
+  }, [userCoords, currentSectorId]);
+
+  return <MapView region={region} />;
+};
+```
+
+<Tip>
+  On driver screens, wire `updateLocation` from `useSocket` inside a `setInterval` using `LOCATION_CONFIG.driverUpdateIntervalMs` (5 000 ms) as the delay. This decouples the Socket.io emit cadence from the GPS polling rate, giving you independent control over how often the device samples GPS versus how often the server is notified.
+</Tip>

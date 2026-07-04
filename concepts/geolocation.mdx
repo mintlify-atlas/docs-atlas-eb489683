@@ -1,0 +1,225 @@
+---
+title: "GPS tracking and geographic sectors in CruciDrive"
+sidebarTitle: "Geolocation"
+description: "CruciDrive uses PostGIS GEOGRAPHY columns and Socket.io sector rooms to broadcast tricimoto driver positions to passengers in real time within Crucita."
+---
+
+CruciDrive's geolocation system is purpose-built for the compact geography of Crucita, Ecuador. Tricimoto drivers emit their GPS coordinates every 5 seconds from the mobile app; the backend persists each update to the `tricimotos` table using a PostGIS `GEOGRAPHY(POINT, 4326)` column and simultaneously broadcasts the position to every passenger subscribed to that driver's sector room. Passengers see nearby tricimotos move in real time on the map without polling the REST API.
+
+## Geographic Sectors
+
+Crucita's operational area is divided into five fixed sectors. Each sector has a unique string ID, a display name, a center coordinate used to focus the map, and a marker color for the UI:
+
+```ts
+export const SECTORS: Sector[] = [
+  {
+    id: 'centro',
+    name: 'Centro de Crucita',
+    center: { lat: -1.0448, lng: -80.5432 },
+    markerColor: '#0D9488',
+  },
+  {
+    id: 'playa',
+    name: 'Malecón / Playa',
+    center: { lat: -1.0470, lng: -80.5485 },
+    markerColor: '#14B8A6',
+  },
+  {
+    id: 'las_gilces',
+    name: 'Las Gilces',
+    center: { lat: -1.0395, lng: -80.5350 },
+    markerColor: '#F59E0B',
+  },
+  {
+    id: 'los_arenales',
+    name: 'Los Arenales',
+    center: { lat: -1.0520, lng: -80.5410 },
+    markerColor: '#FBBF24',
+  },
+  {
+    id: 'san_jacinto',
+    name: 'San Jacinto',
+    center: { lat: -1.0600, lng: -80.5370 },
+    markerColor: '#10B981',
+  },
+];
+```
+
+| Sector ID | Name | Center Coordinates |
+|---|---|---|
+| `centro` | Centro de Crucita | -1.0448, -80.5432 |
+| `playa` | Malecón / Playa | -1.0470, -80.5485 |
+| `las_gilces` | Las Gilces | -1.0395, -80.5350 |
+| `los_arenales` | Los Arenales | -1.0520, -80.5410 |
+| `san_jacinto` | San Jacinto | -1.0600, -80.5370 |
+
+## Fixed Tariff Grid
+
+Rather than calculating dynamic fares from GPS distance, CruciDrive uses a pre-computed tariff matrix between sector pairs. This eliminates surge pricing complexity and makes fares transparent to passengers before they request a ride. Fares are symmetric — the cost from A to B equals the cost from B to A.
+
+```ts
+export const TARIFFS: TariffEntry[] = [
+  { originId: 'centro',      destinationId: 'playa',       price: 1.50, estimatedDistanceKm: 1.2, estimatedTimeMin: 5  },
+  { originId: 'centro',      destinationId: 'las_gilces',  price: 2.00, estimatedDistanceKm: 2.0, estimatedTimeMin: 8  },
+  { originId: 'centro',      destinationId: 'los_arenales',price: 1.75, estimatedDistanceKm: 1.5, estimatedTimeMin: 6  },
+  { originId: 'centro',      destinationId: 'san_jacinto', price: 2.40, estimatedDistanceKm: 3.2, estimatedTimeMin: 10 },
+  { originId: 'playa',       destinationId: 'las_gilces',  price: 2.50, estimatedDistanceKm: 3.0, estimatedTimeMin: 12 },
+  { originId: 'playa',       destinationId: 'los_arenales',price: 1.50, estimatedDistanceKm: 1.0, estimatedTimeMin: 4  },
+  { originId: 'playa',       destinationId: 'san_jacinto', price: 2.20, estimatedDistanceKm: 2.8, estimatedTimeMin: 9  },
+  { originId: 'las_gilces',  destinationId: 'los_arenales',price: 2.00, estimatedDistanceKm: 2.2, estimatedTimeMin: 8  },
+  { originId: 'las_gilces',  destinationId: 'san_jacinto', price: 3.00, estimatedDistanceKm: 4.0, estimatedTimeMin: 15 },
+  { originId: 'los_arenales',destinationId: 'san_jacinto', price: 1.50, estimatedDistanceKm: 1.3, estimatedTimeMin: 5  },
+];
+```
+
+| Origin → Destination | Price (USD) | Distance (km) | Est. Time (min) |
+|---|---|---|---|
+| Centro → Playa | $1.50 | 1.2 | 5 |
+| Centro → Las Gilces | $2.00 | 2.0 | 8 |
+| Centro → Los Arenales | $1.75 | 1.5 | 6 |
+| Centro → San Jacinto | $2.40 | 3.2 | 10 |
+| Playa → Las Gilces | $2.50 | 3.0 | 12 |
+| Playa → Los Arenales | $1.50 | 1.0 | 4 |
+| Playa → San Jacinto | $2.20 | 2.8 | 9 |
+| Las Gilces → Los Arenales | $2.00 | 2.2 | 8 |
+| Las Gilces → San Jacinto | $3.00 | 4.0 | 15 |
+| Los Arenales → San Jacinto | $1.50 | 1.3 | 5 |
+
+## PostGIS Storage
+
+Driver positions and ride coordinates are stored as native PostGIS geography columns using the WGS84 (EPSG:4326) coordinate reference system:
+
+- `tricimotos.ubicacion_actual` — `GEOGRAPHY(POINT, 4326)`: updated on every `update_location` Socket event
+- `viajes.origen` — `GEOGRAPHY(POINT, 4326)`: set at ride creation from the passenger's chosen origin sector center
+- `viajes.destino` — `GEOGRAPHY(POINT, 4326)`: set at ride creation from the passenger's chosen destination sector center
+
+The `toWKT` utility in `backend/src/utils/geo.js` converts a `{ lng, lat }` pair to PostGIS Well-Known Text before any database write:
+
+```js
+/**
+ * Converts { lat, lng } coordinates to PostGIS Well-Known Text.
+ * PostGIS expects longitude before latitude: POINT(lng lat)
+ */
+const toWKT = (lng, lat) => `POINT(${lng} ${lat})`;
+```
+
+Note the argument order: PostGIS WKT uses `POINT(longitude latitude)`, so `lng` is always the first argument.
+
+## Socket.io Sector Rooms
+
+Each geographic sector maps to a Socket.io room named `sector:{sectorId}`. When a passenger opens the map screen, their client emits a `join_sector` event with the current sector ID; the server calls `socket.join('sector:playa')` (for example), subscribing them to all driver updates in that area.
+
+When a driver emits `update_location`, the server:
+1. Validates that the socket's role is `conductor`
+2. Writes the new position to `tricimotos.ubicacion_actual` via a PostGIS WKT update
+3. Broadcasts a `location_updated` event to all other sockets in `sector:{sectorId}`
+
+```js
+socket.on('update_location', async ({ sectorId, coords, estado }) => {
+  // Role guard — only conductores may emit location
+  if (socket.user.rol !== 'conductor') {
+    return socket.emit('error_message', 'Acción denegada. Solo los conductores pueden actualizar geolocalización.');
+  }
+
+  // Persist to PostGIS
+  await supabase
+    .from('tricimotos')
+    .update({
+      ubicacion_actual: toWKT(coords.lng, coords.lat),
+      estado: estado || 'disponible',
+      updated_at: new Date().toISOString()
+    })
+    .eq('conductor_id', socket.user.id);
+
+  // Broadcast to all passengers in the sector room (excluding sender)
+  const room = `sector:${sectorId}`;
+  socket.to(room).emit('location_updated', {
+    conductorId: socket.user.id,
+    nombre: socket.user.nombre,
+    coords,
+    estado: estado || 'disponible'
+  });
+});
+```
+
+## Driver Location Updates
+
+The `update_location` event payload sent by the driver client:
+
+```json
+{
+  "sectorId": "playa",
+  "coords": { "lat": -1.0470, "lng": -80.5485 },
+  "estado": "disponible"
+}
+```
+
+The `location_updated` event payload broadcast to passengers in the sector room:
+
+```json
+{
+  "conductorId": "uuid-of-conductor",
+  "nombre": "Carlos Mendoza",
+  "coords": { "lat": -1.0470, "lng": -80.5485 },
+  "estado": "disponible"
+}
+```
+
+Valid values for `estado` are `disponible`, `ocupado`, and `inactivo`, matching the `CHECK` constraint on `tricimotos.estado`.
+
+## Nearest Sector Helper
+
+The `findNearestSector` function in `sectors.ts` uses Euclidean distance over sector center coordinates to snap a raw GPS coordinate to the closest sector. This is sufficient for Crucita's scale — the entire operational area spans roughly 4 km — and avoids the overhead of spherical distance calculations:
+
+```ts
+export const findNearestSector = (lat: number, lng: number): Sector => {
+  let nearestSector = SECTORS[0];
+  let minDistance = Infinity;
+
+  for (const sector of SECTORS) {
+    const dLat = sector.center.lat - lat;
+    const dLng = sector.center.lng - lng;
+    const distance = Math.sqrt(dLat * dLat + dLng * dLng);
+
+    if (distance < minDistance) {
+      minDistance = distance;
+      nearestSector = sector;
+    }
+  }
+
+  return nearestSector;
+};
+```
+
+This function is called client-side when the passenger opens the ride request screen to pre-select the origin sector based on their current GPS fix.
+
+## Location Config
+
+All geolocation timing and accuracy parameters are centralized in `LOCATION_CONFIG` inside `frontend/src/constants/config.ts`:
+
+```ts
+export const LOCATION_CONFIG = {
+  /** GPS update interval for the driver (ms) */
+  driverUpdateIntervalMs: 5000,
+
+  /** Desired GPS accuracy */
+  desiredAccuracy: 'balanced' as const,
+
+  /** Minimum movement to emit an update (meters) */
+  distanceFilterMeters: 10,
+
+  /** Initial map region centered on Crucita, Manabí */
+  defaultRegion: {
+    latitude: -1.0448,
+    longitude: -80.5432,
+    latitudeDelta: 0.02,
+    longitudeDelta: 0.02,
+  },
+} as const;
+```
+
+The `distanceFilterMeters: 10` setting means the device OS suppresses GPS events when the driver has moved less than 10 meters since the last emission, cutting redundant network traffic during idle periods.
+
+<Note>
+The `driverDataLimitBytes` in `APP_CONFIG` is set to **15 MB per day** (`15 * 1024 * 1024`). The 5-second update interval combined with the 10-meter distance filter is calibrated to keep a full driving shift well within this budget on typical Ecuadorian mobile data plans.
+</Note>

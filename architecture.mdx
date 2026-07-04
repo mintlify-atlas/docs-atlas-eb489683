@@ -1,0 +1,211 @@
+---
+title: "CruciDrive system architecture and monorepo structure"
+sidebarTitle: "Architecture"
+description: "Explore CruciDrive's modular monolith backend, React Native frontend, Supabase database layer, and Socket.io real-time infrastructure."
+---
+
+CruciDrive is organized as a **monorepo** with two first-class environments at the root: `/backend` (Node.js + Express + Socket.io) and `/frontend` (React Native via Expo). Both applications share a single Supabase project as the persistent data layer, but are developed, configured, and deployed independently. The backend exposes a dual-transport server — REST over HTTP for stateless operations and WebSockets for real-time GPS and chat events — while the mobile frontend consumes both channels simultaneously during an active ride.
+
+---
+
+## Monorepo Structure
+
+The full directory layout of the project, as defined in `ESTRUCTURA.md`, is:
+
+```text
+crucidrive-app/
+├── backend/                  # Node.js / Express environment
+│   ├── src/
+│   │   ├── config/           # DB connection, environment variables
+│   │   ├── controllers/      # Business logic
+│   │   ├── middlewares/      # Auth, error handling, security
+│   │   ├── models/           # PostgreSQL schema definitions
+│   │   ├── routes/           # REST endpoint definitions
+│   │   ├── sockets/          # Socket.io events (live tracking)
+│   │   └── index.js          # Server entry point
+│   ├── package.json
+│   └── .env
+│
+├── frontend/                 # React Native (Expo) — UI/UX
+│   ├── src/
+│   │   ├── assets/           # Images, icons, fonts
+│   │   ├── components/       # Reusable components (Glass buttons, cards)
+│   │   ├── constants/        # Color palette, config, sector definitions
+│   │   ├── hooks/            # Custom hooks (useLocation, useSocket)
+│   │   ├── navigation/       # Expo Router configuration
+│   │   ├── screens/          # Main screens (Map, Login, RideRequest)
+│   │   ├── store/            # Global state (Zustand)
+│   │   ├── styles/           # Glassmorphism utilities (Tailwind / global styles)
+│   │   └── utils/            # Helper functions (distance calc, formatting)
+│   ├── app.json
+│   ├── package.json
+│   └── babel.config.js
+│
+├── REGISTRO_CAMBIOS.md       # AI agent activity log
+├── ARQUITECTURA.md           # Technical definition
+├── PLAN.md                   # Project phases
+├── CASOSDEUSO.md             # Functional requirements
+├── SEGURIDAD.md              # LOPDP regulations and encryption
+└── SKILLS.md                 # Agent directives
+```
+
+---
+
+## Tech Stack
+
+| Layer | Technology | Purpose |
+|---|---|---|
+| **Frontend** | React Native (Expo 57) | Cross-platform iOS and Android mobile app |
+| **Backend** | Node.js + Express 5 | REST API and Socket.io server |
+| **Database** | PostgreSQL + PostGIS | Relational data and geospatial proximity queries |
+| **Auth** | Supabase Auth | Phone OTP authentication and JWT issuance |
+| **Real-time** | Socket.io 4 | Live GPS tracking and in-ride chat |
+| **State** | Zustand 5 | Frontend global state management |
+| **UI** | NativeWind + expo-blur | Glassmorphic design system |
+
+Key library versions sourced directly from the project's `package.json` files:
+
+- `express` ^5.2.1, `socket.io` ^4.8.3, `@supabase/supabase-js` ^2.110.0 (backend)
+- `expo` ~57.0.1, `react-native` 0.86.0, `zustand` ^5.0.0, `socket.io-client` ^4.8.0, `expo-blur` ~57.0.0, `react-native-reanimated` 4.5.0, `expo-location` ~57.0.1 (frontend)
+
+---
+
+## Architecture Patterns
+
+**Modular Monolith (Backend)**
+The backend is a single Node.js process (`src/index.js`) that boots an Express HTTP server and a Socket.io server, both sharing the same underlying `http.Server` instance. Functionality is divided into discrete modules — `routes/`, `controllers/`, `middlewares/`, `sockets/` — following separation of concerns without the operational overhead of microservices.
+
+**MVC in Express**
+HTTP requests flow through a strict three-layer chain:
+
+```
+Incoming Request → routes/ (URL mapping) → middlewares/ (auth, role check) → controllers/ (Supabase queries + response)
+```
+
+The three registered REST route groups are:
+- `POST /api/auth/*` — phone OTP login and user profile creation
+- `PATCH /api/viajes/*` — ride lifecycle management (create, accept, update status)
+- `GET/POST /api/chats/*` — chat thread and message history retrieval
+
+**Zustand for Frontend State**
+The Expo app manages all cross-screen state — authenticated user session, active ride details, live driver coordinates, and chat messages — through **Zustand stores** located in `src/store/`. Zustand's minimal API avoids boilerplate while keeping state updates reactive and co-located with the logic that triggers them.
+
+**Glassmorphic UI System**
+All UI containers (modals, ride cards, navigation bars, map overlays) use semi-transparent backgrounds (`rgba(255, 255, 255, 0.1)`), `backdrop-blur` via `expo-blur`'s `<BlurView>`, subtle borders, and soft drop shadows. Screen transitions and loading states are animated at 60 fps via `react-native-reanimated` 4.
+
+---
+
+## Data Flow
+
+CruciDrive uses **two transport layers in parallel**:
+
+- **REST (HTTP)** — used for stateless, transactional operations: authentication, ride creation, ride acceptance, status changes, and fetching chat history.
+- **WebSockets (Socket.io)** — used for continuous, bidirectional real-time communication: live GPS position broadcasts from drivers to passengers, and in-ride chat message delivery.
+
+```
+[Mobile App] ──HTTP──► [Express API]  ──► [Supabase / PostgreSQL]
+[Mobile App] ──WS────► [Socket.io]    ──► [Supabase / PostgreSQL]
+```
+
+### Socket.io Event Reference
+
+The `socketHandler.js` module registers three event groups on the Socket.io server:
+
+| Event (Client → Server) | Direction | Description |
+|---|---|---|
+| `join_sector` | Client → Server | Driver or passenger joins a geographic sector room |
+| `update_location` | Client → Server | Driver broadcasts new GPS coordinates; persisted to `tricimotos.ubicacion_actual` |
+| `location_updated` | Server → Client | Broadcast to all clients in the sector room with driver position and status |
+| `join_chat` | Client → Server | Authenticated user joins a per-trip chat room (membership verified against `thread_members`) |
+| `send_message` | Client → Server | User sends a message; persisted to `messages` table and broadcast to the room |
+| `message_received` | Server → Client | Broadcast to all members of the chat room with the full message record |
+
+Every Socket.io connection goes through a **JWT authentication middleware** before the `connection` event fires. The middleware reads the bearer token from `socket.handshake.auth.token`, validates it against Supabase Auth, and attaches the resolved user profile (including `rol`) to `socket.user`.
+
+---
+
+## Database Schema Overview
+
+The Supabase PostgreSQL database (`database.sql`) defines **6 tables** with PostGIS and full Row Level Security enabled:
+
+```
+perfiles ──────────────────────────────────────────┐
+  id (UUID, PK → auth.users)                       │
+  rol: 'pasajero' | 'conductor' | 'admin'          │
+  nombre, telefono, activo, created_at             │
+                                                   │
+tricimotos ───────────────────────────────────────── (conductor_id → perfiles.id)
+  id (UUID, PK)
+  conductor_id (UNIQUE FK → perfiles.id)
+  placa, estado: 'disponible'|'ocupado'|'inactivo'
+  ubicacion_actual (GEOGRAPHY POINT, SRID 4326)   ← PostGIS live GPS column
+  updated_at
+
+viajes ────────────────────────────────────────────── (pasajero_id, conductor_id → perfiles.id)
+  id (UUID, PK)
+  pasajero_id (FK → perfiles.id)
+  conductor_id (FK → perfiles.id)
+  origen, destino (GEOGRAPHY POINT, SRID 4326)    ← PostGIS pickup/dropoff
+  estado: 'solicitado'|'aceptado'|'en_curso'|'finalizado'|'cancelado'
+  tarifa (DECIMAL), created_at, updated_at
+
+threads ───────────────────────────────────────────── (viaje_id → viajes.id)
+  id (UUID, PK)
+  viaje_id (UNIQUE FK → viajes.id)               ← one chat thread per trip
+  created_at
+
+thread_members ─────────────────────────────────────── (thread_id → threads.id, user_id → perfiles.id)
+  id (UUID, PK)
+  thread_id (FK → threads.id)
+  user_id (FK → perfiles.id)
+  UNIQUE(thread_id, user_id)                     ← prevents duplicate membership
+
+messages ──────────────────────────────────────────── (thread_id → threads.id, sender_id → perfiles.id)
+  id (UUID, PK)
+  thread_id (FK → threads.id)
+  sender_id (FK → perfiles.id)
+  content (TEXT), created_at
+```
+
+PostGIS is enabled via `CREATE EXTENSION IF NOT EXISTS postgis`, and both `tricimotos.ubicacion_actual` and `viajes.origen`/`viajes.destino` use `GEOGRAPHY(POINT, 4326)` — the WGS 84 coordinate system used by GPS receivers.
+
+---
+
+## Security Model
+
+CruciDrive implements a layered security model across the REST and WebSocket layers:
+
+**JWT Validation on Every Request**
+The `authMiddleware.js` extracts the `Authorization: Bearer <token>` header on every protected REST route and calls `supabase.auth.getUser(token)` to validate it. Invalid or expired tokens receive a `401` response immediately. The same token validation runs as a Socket.io `io.use()` middleware — unauthenticated WebSocket connections are rejected before the `connection` event fires.
+
+**Role-Based Middleware**
+`roleMiddleware.js` gates specific routes by the `rol` field from the user's `perfiles` record. For example, only users with `rol: 'conductor'` can emit `update_location` events, and only users with `rol: 'admin'` can access administrative endpoints.
+
+**Supabase Row Level Security (RLS)**
+Every table has RLS enabled. Key policies include:
+- `perfiles`: users can only read, insert, or update their own profile row
+- `tricimotos`: drivers can only update their own vehicle record
+- `viajes`: passengers and drivers can only read/update trips they are a party to
+- `messages`: users can only read or insert messages in chat threads they are a member of
+
+**LOPDP Compliance**
+Sensitive personal data is encrypted with AES-256. GPS tracking is only active for drivers who have explicitly consented at registration. Users can revoke their tracking consent from within the app at any time, in compliance with Ecuador's **Ley Orgánica de Protección de Datos Personales**.
+
+---
+
+## Explore Further
+
+<CardGroup cols={2}>
+  <Card title="Roles & Permissions" icon="users" href="/concepts/roles">
+    Deep dive into the `pasajero`, `conductor`, and `admin` role model and how permissions are enforced at the middleware and RLS layers.
+  </Card>
+  <Card title="Ride Lifecycle" icon="route" href="/concepts/ride-lifecycle">
+    Follow a trip from `solicitado` through `aceptado`, `en_curso`, and `finalizado` — including the REST endpoints and state transitions at each stage.
+  </Card>
+  <Card title="Geolocation & Sectors" icon="location-dot" href="/concepts/geolocation">
+    Learn how PostGIS `GEOGRAPHY(POINT, 4326)` columns, the `toWKT` utility, and Socket.io sector rooms power proximity matching and live driver tracking.
+  </Card>
+  <Card title="Real-time Chat" icon="comments" href="/concepts/realtime-chat">
+    Understand the `threads → thread_members → messages` schema, WebSocket room management, and how chat membership is enforced per trip.
+  </Card>
+</CardGroup>

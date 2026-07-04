@@ -1,0 +1,98 @@
+---
+title: "useAuthStore — global authentication state with Zustand"
+sidebarTitle: "Auth Store"
+description: "Zustand store that holds the Supabase session, user object, and CruciDrive user profile. Provides actions for session management across the entire app."
+---
+
+`useAuthStore` is the single source of truth for authentication state in CruciDrive. It stores the Supabase `Session`, the `User` object, and the extended `UserProfile` fetched from the `public.perfiles` table. Every screen that needs to know whether the user is logged in, or what role they hold (`pasajero`, `conductor`, `admin`), reads directly from this store instead of calling Supabase's client directly.
+
+## State shape
+
+The store's internal state is typed as `AuthState`:
+
+```typescript
+interface AuthState {
+  /** Active Supabase session */
+  session: Session | null;
+  /** Supabase Auth user object */
+  user: User | null;
+  /** Extended user profile from the 'perfiles' table */
+  profile: UserProfile | null;
+  /** True while the initial session check is in flight */
+  isLoading: boolean;
+  /** True once the initial session check has completed */
+  isInitialized: boolean;
+
+  // ── Actions ────────────────────────────────────────────
+  setSession: (session: Session | null) => void;
+  setProfile: (profile: UserProfile | null) => void;
+  setLoading: (loading: boolean) => void;
+  setInitialized: (initialized: boolean) => void;
+  clearSession: () => void;
+}
+```
+
+## `UserProfile` type
+
+`UserProfile` maps directly to a row in `public.perfiles` and extends the base Supabase `User` with CruciDrive-specific fields:
+
+```typescript
+interface UserProfile {
+  id: string;
+  nombre: string;
+  telefono: string;
+  rol: 'pasajero' | 'conductor' | 'admin';
+  estado_operativo?: 'disponible' | 'ocupado' | 'inactivo';
+  calificacion?: number;
+  avatar_url?: string;
+}
+```
+
+`estado_operativo` is only meaningful for `conductor` accounts and drives the driver's availability indicator on the map. `calificacion` is a floating-point average updated server-side after each completed ride.
+
+## Actions
+
+| Action | Signature | Description |
+|---|---|---|
+| `setSession` | `(session: Session \| null) => void` | Stores the Supabase session and derives `user` from `session.user`. Passing `null` clears both. |
+| `setProfile` | `(profile: UserProfile \| null) => void` | Stores the extended profile row fetched from `public.perfiles` after login. |
+| `setLoading` | `(loading: boolean) => void` | Toggles the `isLoading` flag used during auth transitions. |
+| `setInitialized` | `(initialized: boolean) => void` | Marks the app-mount session check as complete. Should only be called once at startup. |
+| `clearSession` | `() => void` | Resets all auth state to logged-out defaults (see below). |
+
+## Reading state
+
+Subscribe to individual slices to avoid unnecessary re-renders. Always prefer granular selectors over selecting the entire store object:
+
+```typescript
+const session = useAuthStore((state) => state.session);
+const profile = useAuthStore((state) => state.profile);
+const isLoading = useAuthStore((state) => state.isLoading);
+const isInitialized = useAuthStore((state) => state.isInitialized);
+
+// Derived: is the user a driver?
+const isDriver = useAuthStore((state) => state.profile?.rol === 'conductor');
+```
+
+## `clearSession`
+
+`clearSession` is the logout action. It atomically resets the following slice back to initial defaults in a single `set` call, avoiding any intermediate render with partial state:
+
+```typescript
+{
+  session: null,
+  user: null,
+  profile: null,
+  isLoading: false,
+}
+```
+
+Note that `isInitialized` is **not** reset by `clearSession` — it remains `true` so the app does not show the splash screen again after logout.
+
+<Note>
+  `isInitialized` is `false` until the Supabase `onAuthStateChange` handler fires on app mount and the resulting session check completes. Render a splash or skeleton screen while `isInitialized === false` to avoid flashing the login screen for already-authenticated users.
+</Note>
+
+<Tip>
+  Prefer the `useSupabaseAuth()` hook over calling store actions like `setSession` or `setProfile` directly. The hook subscribes to Supabase Auth events, fetches the profile row, and keeps the store synchronized automatically — including handling token refresh cycles.
+</Tip>

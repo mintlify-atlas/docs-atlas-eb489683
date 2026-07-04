@@ -1,0 +1,143 @@
+---
+title: "POST /api/auth/registro — register a passenger or driver profile"
+sidebarTitle: "Register Profile"
+description: "Creates a user profile in public.perfiles after Supabase Auth registration. For drivers, also creates a tricimotos record linked to the profile."
+---
+
+After OTP verification, a Supabase Auth user exists but has no application profile yet. Calling this endpoint creates a row in `public.perfiles` and assigns the user one of two roles — `pasajero` or `conductor`. Driver registrations also create a linked row in `public.tricimotos` in the same request; if that second insert fails, the profile is deleted automatically so no orphaned records are left behind.
+
+## Request
+
+<ParamField header="Authorization" type="string" required>
+  Bearer JWT obtained from Supabase Auth after OTP verification. Example: `Bearer eyJhbGci...`
+</ParamField>
+
+<ParamField body="rol" type="string" required>
+  The role to assign to this profile. Must be exactly `"pasajero"` or `"conductor"`. Any other value returns a `400`.
+</ParamField>
+
+<ParamField body="nombre" type="string" required>
+  The user's full name as it will appear in the app and to ride participants.
+</ParamField>
+
+<ParamField body="telefono" type="string" required>
+  The user's phone number in E.164 format (e.g. `+593987654321`). Must be unique across `public.perfiles` — duplicate values return a `400`.
+</ParamField>
+
+<ParamField body="placa" type="string">
+  Vehicle plate number for the tricimoto unit. **Required when `rol` is `"conductor"`**; ignored for passengers. Example: `"MBD-1234"`.
+</ParamField>
+
+### Example request bodies
+
+```json
+// Passenger
+{ "rol": "pasajero", "nombre": "Ana Mendoza", "telefono": "+593987654321" }
+```
+
+```json
+// Driver
+{ "rol": "conductor", "nombre": "Carlos Vera", "telefono": "+593991234567", "placa": "MBD-1234" }
+```
+
+## Response `201`
+
+A successful registration returns a `status: "success"` envelope with the following `data` payload:
+
+<ResponseField name="perfil" type="object">
+  The newly created profile record from `public.perfiles`.
+
+  <Expandable title="perfil fields">
+    <ResponseField name="perfil.id" type="string">
+      UUID sourced directly from `auth.users` — the same value as the Supabase Auth user ID contained in the JWT.
+    </ResponseField>
+
+    <ResponseField name="perfil.rol" type="string">
+      The assigned role: `"pasajero"` or `"conductor"`.
+    </ResponseField>
+
+    <ResponseField name="perfil.nombre" type="string">
+      The user's full name as stored.
+    </ResponseField>
+
+    <ResponseField name="perfil.telefono" type="string">
+      The registered phone number.
+    </ResponseField>
+
+    <ResponseField name="perfil.activo" type="boolean">
+      Always `true` on creation. Can be toggled by platform administrators.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="tricimoto" type="object | null">
+  Only present (non-null) when `rol` is `"conductor"`. Contains the newly created record from `public.tricimotos`.
+
+  <Expandable title="tricimoto fields">
+    <ResponseField name="tricimoto.id" type="string">
+      Auto-generated UUID for the tricimoto unit.
+    </ResponseField>
+
+    <ResponseField name="tricimoto.conductor_id" type="string">
+      UUID of the owning conductor — matches `perfil.id`.
+    </ResponseField>
+
+    <ResponseField name="tricimoto.placa" type="string">
+      The plate number provided in the request.
+    </ResponseField>
+
+    <ResponseField name="tricimoto.estado" type="string">
+      Always `"inactivo"` on creation. The conductor must activate availability separately.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Error cases
+
+| HTTP status | Cause |
+|-------------|-------|
+| `400` | One or more of `rol`, `nombre`, or `telefono` is missing from the request body |
+| `400` | `rol` is not `"pasajero"` or `"conductor"` |
+| `400` | `rol` is `"conductor"` but `placa` was not provided |
+| `400` | Profile insert failed — most commonly a duplicate `telefono` violating the unique constraint |
+| `400` | Tricimoto insert failed (conductor only) — profile is automatically deleted before this error is returned |
+
+## Full curl example — driver registration
+
+```bash
+curl -X POST https://api.crucidrive.local/api/auth/registro \
+  -H "Authorization: Bearer <your_access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rol": "conductor",
+    "nombre": "Carlos Vera",
+    "telefono": "+593991234567",
+    "placa": "MBD-1234"
+  }'
+```
+
+```json
+{
+  "status": "success",
+  "message": "Perfil registrado correctamente.",
+  "data": {
+    "perfil": {
+      "id": "a1b2c3d4-0000-0000-0000-111122223333",
+      "rol": "conductor",
+      "nombre": "Carlos Vera",
+      "telefono": "+593991234567",
+      "activo": true
+    },
+    "tricimoto": {
+      "id": "f9e8d7c6-0000-0000-0000-aabbccddeeff",
+      "conductor_id": "a1b2c3d4-0000-0000-0000-111122223333",
+      "placa": "MBD-1234",
+      "estado": "inactivo"
+    }
+  }
+}
+```
+
+<Tip>
+  If the tricimoto insert fails (step 2), the server automatically deletes the profile row it just inserted before returning the error. This means there are no orphaned `perfiles` records — the client can safely retry the full registration once the issue is resolved (e.g. duplicate plate number).
+</Tip>

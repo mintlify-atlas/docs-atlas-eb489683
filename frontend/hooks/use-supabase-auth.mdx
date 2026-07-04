@@ -1,0 +1,172 @@
+---
+title: "useSupabaseAuth — phone OTP authentication hook"
+sidebarTitle: "useSupabaseAuth"
+description: "React hook that manages the full Supabase Phone OTP auth lifecycle: send SMS, verify code, register profile, fetch user data, and sign out."
+---
+
+`useSupabaseAuth` encapsulates all authentication logic for CruciDrive. On mount it reads the active Supabase session, subscribes to `onAuthStateChange` events, and keeps the Zustand `useAuthStore` in sync. It exposes the full Phone OTP flow — sending the SMS code, verifying it, registering a new profile against the Express backend, and signing out — so every screen in the app can share a single, consistent auth state.
+
+<Note>
+  This hook internally uses `authFetch` — a thin `fetch` wrapper that automatically attaches the current Bearer token from the Zustand store — for profile registration calls to the Express backend.
+</Note>
+
+## Signature
+
+```typescript
+import { useSupabaseAuth } from '@/hooks/useSupabaseAuth';
+
+const {
+  session,
+  user,
+  profile,
+  isLoading,
+  isInitialized,
+  otpSent,
+  authError,
+  sendOtp,
+  verifyOtp,
+  registerProfile,
+  signOut,
+  fetchProfile,
+  setAuthError,
+  setOtpSent,
+} = useSupabaseAuth();
+```
+
+The full return-type interface:
+
+```typescript
+interface UseSupabaseAuthReturn {
+  // ── State ──────────────────────────────────────────────────
+  session:       Session | null;
+  user:          User | null;
+  profile:       UserProfile | null;
+  isLoading:     boolean;
+  isInitialized: boolean;
+  otpSent:       boolean;
+  authError:     string | null;
+
+  // ── Actions ────────────────────────────────────────────────
+  sendOtp(phone: string): Promise<boolean>;
+  verifyOtp(phone: string, code: string): Promise<boolean>;
+  registerProfile(data: { nombre: string; rol: 'pasajero' | 'conductor' }): Promise<boolean>;
+  signOut(): Promise<void>;
+  fetchProfile(userId: string): Promise<UserProfile | null>;
+  setAuthError(error: string | null): void;
+  setOtpSent(sent: boolean): void;
+}
+```
+
+## Return values
+
+| Property | Type | Description |
+|---|---|---|
+| `session` | `Session \| null` | Active Supabase auth session, including the JWT access token |
+| `user` | `User \| null` | Supabase `auth.users` record for the current session |
+| `profile` | `UserProfile \| null` | Row from the `perfiles` table — includes `nombre`, `telefono`, `rol`, `calificacion` |
+| `isLoading` | `boolean` | `true` while any async auth operation is in progress |
+| `isInitialized` | `boolean` | `true` once the initial `getSession()` call has completed |
+| `otpSent` | `boolean` | `true` after `sendOtp` completes successfully |
+| `authError` | `string \| null` | Human-readable error message from the last failed operation |
+| `sendOtp` | `(phone: string) => Promise<boolean>` | Sends an SMS OTP to the given phone number |
+| `verifyOtp` | `(phone: string, code: string) => Promise<boolean>` | Verifies the SMS code and establishes a session |
+| `registerProfile` | `(data) => Promise<boolean>` | POSTs profile data to the Express backend |
+| `signOut` | `() => Promise<void>` | Signs out and clears the Zustand session |
+| `fetchProfile` | `(userId: string) => Promise<UserProfile \| null>` | Queries the `perfiles` table for a user ID |
+| `setAuthError` | `(error: string \| null) => void` | Manually set or clear the auth error message |
+| `setOtpSent` | `(sent: boolean) => void` | Manually reset the `otpSent` flag |
+
+## `sendOtp(phone)`
+
+Calls `supabase.auth.signInWithOtp({ phone })` to trigger an SMS code to the supplied number. The phone number must include the international dialling prefix.
+
+Returns `Promise<boolean>` — `true` if the SMS was dispatched without error, `false` otherwise. On failure, `authError` is set to the Supabase error message.
+
+```typescript
+const { sendOtp } = useSupabaseAuth();
+
+const success = await sendOtp('+593987654321');
+
+if (!success) {
+  // authError is now set — display it to the user
+}
+```
+
+## `verifyOtp(phone, code)`
+
+Calls `supabase.auth.verifyOtp({ phone, token: code, type: 'sms' })`. On success the returned `Session` is written to the Zustand store via `setSession`, making the JWT immediately available to `authFetch` and `useSocket`.
+
+Returns `Promise<boolean>` — `true` if the session was established, `false` otherwise.
+
+```typescript
+const { verifyOtp } = useSupabaseAuth();
+
+const success = await verifyOtp('+593987654321', '123456');
+
+if (success) {
+  // session is now set — navigate to home
+}
+```
+
+## `registerProfile(profileData)`
+
+POSTs `{ nombre, rol }` to `POST /api/auth/registro` using `authFetch` (Bearer token auto-attached). On a successful `2xx` response, `fetchProfile` is called immediately so `profile` reflects the new row without a page reload.
+
+<ParamField body="nombre" type="string" required>
+  The user's display name, e.g. `"Ana Mendoza"`.
+</ParamField>
+
+<ParamField body="rol" type="'pasajero' | 'conductor'" required>
+  The account role. Determines which navigation group (`(passenger)` or `(driver)`) the user is routed to after login.
+</ParamField>
+
+Returns `Promise<boolean>` — `true` if the backend created or updated the profile successfully.
+
+## `signOut()`
+
+Calls `supabase.auth.signOut()` then `clearSession()` in the Zustand store. This removes the JWT, sets `session` and `user` to `null`, and causes `useSocket` to disconnect automatically (it watches `session?.access_token`).
+
+## Session initialization
+
+On mount, a `useEffect` runs the following sequence:
+
+1. Calls `supabase.auth.getSession()` to restore any persisted session from `AsyncStorage`.
+2. If a session exists, calls `fetchProfile(session.user.id)` to populate `profile`.
+3. Sets `isInitialized: true` once both calls complete (regardless of outcome).
+4. Subscribes to `supabase.auth.onAuthStateChange` to react to token refreshes and sign-out events. The subscription is cleaned up when the hook unmounts.
+
+This means the root layout can gate navigation on `isInitialized` to avoid a flash of the login screen when the app resumes with an active session.
+
+## Complete login screen flow
+
+```typescript
+const {
+  sendOtp,
+  verifyOtp,
+  registerProfile,
+  otpSent,
+  authError,
+  isLoading,
+  profile,
+} = useSupabaseAuth();
+
+// Step 1 — user submits their phone number
+const handleSendOtp = async () => {
+  await sendOtp('+593987654321');
+  // otpSent becomes true → render the code input
+};
+
+// Step 2 — user submits the 6-digit code
+const handleVerifyOtp = async (code: string) => {
+  const verified = await verifyOtp('+593987654321', code);
+
+  if (!verified) return; // authError is set
+
+  // Step 3 — new user: collect name and role, then register
+  if (!profile) {
+    await registerProfile({ nombre: 'Ana Mendoza', rol: 'pasajero' });
+  }
+
+  // profile is now populated → navigate to (app)
+};
+```

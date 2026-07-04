@@ -1,0 +1,139 @@
+---
+title: "useLocationStore — device GPS state with Zustand"
+sidebarTitle: "Location Store"
+description: "Zustand store that holds the device's current GPS coordinates, permission status, and nearest geographic sector for use across CruciDrive screens."
+---
+
+`useLocationStore` centralizes GPS state so both the map screen and the Socket.io update loop can share the same coordinates without redundant `expo-location` calls. Rather than polling `expo-location` independently in each screen, a single `useLocation` hook writes into this store, and any component that needs the device position simply reads from it. This also means driver location broadcasts over Socket.io always use the most recently stored coordinates.
+
+## Store implementation
+
+The full store as it lives in `src/store/useLocationStore.ts`:
+
+```typescript
+import { create } from 'zustand';
+
+export interface Coordinates {
+  lat: number;
+  lng: number;
+}
+
+export interface NearbyDriver {
+  conductorId: string;
+  nombre: string;
+  coords: Coordinates;
+  estado: 'disponible' | 'ocupado' | 'inactivo';
+  lastUpdate: number;
+}
+
+interface LocationState {
+  userCoords: Coordinates | null;
+  currentSectorId: string | null;
+  nearbyDrivers: Map<string, NearbyDriver>;
+  hasPermission: boolean;
+  isTracking: boolean;
+
+  setUserCoords: (coords: Coordinates) => void;
+  setCurrentSector: (sectorId: string) => void;
+  updateNearbyDriver: (driver: NearbyDriver) => void;
+  removeNearbyDriver: (conductorId: string) => void;
+  clearNearbyDrivers: () => void;
+  setPermission: (hasPermission: boolean) => void;
+  setTracking: (isTracking: boolean) => void;
+}
+
+export const useLocationStore = create<LocationState>((set) => ({
+  userCoords: null,
+  currentSectorId: null,
+  nearbyDrivers: new Map(),
+  hasPermission: false,
+  isTracking: false,
+
+  setUserCoords: (userCoords) => set({ userCoords }),
+
+  setCurrentSector: (currentSectorId) => set({ currentSectorId }),
+
+  updateNearbyDriver: (driver) =>
+    set((state) => {
+      const updatedMap = new Map(state.nearbyDrivers);
+      updatedMap.set(driver.conductorId, {
+        ...driver,
+        lastUpdate: Date.now(),
+      });
+      return { nearbyDrivers: updatedMap };
+    }),
+
+  removeNearbyDriver: (conductorId) =>
+    set((state) => {
+      const updatedMap = new Map(state.nearbyDrivers);
+      updatedMap.delete(conductorId);
+      return { nearbyDrivers: updatedMap };
+    }),
+
+  clearNearbyDrivers: () => set({ nearbyDrivers: new Map() }),
+
+  setPermission: (hasPermission) => set({ hasPermission }),
+
+  setTracking: (isTracking) => set({ isTracking }),
+}));
+```
+
+## State shape
+
+| Field | Type | Description |
+|---|---|---|
+| `userCoords` | `Coordinates \| null` | The device's current latitude/longitude. `null` until the first GPS fix is received. |
+| `currentSectorId` | `string \| null` | The ID of the Crucita sector (e.g. `'centro'`, `'playa'`) that corresponds to `userCoords`. Computed by the `useLocation` hook via sector boundary lookup. |
+| `nearbyDrivers` | `Map<string, NearbyDriver>` | A live map of nearby driver entries keyed by `conductorId`. Populated and pruned by Socket.io `conductor:ubicacion` events. |
+| `hasPermission` | `boolean` | `true` once `expo-location` `requestForegroundPermissionsAsync()` resolves with `granted`. |
+| `isTracking` | `boolean` | `true` while the location subscription is active. Used to show the GPS indicator in the UI. |
+
+### `NearbyDriver`
+
+Each entry in `nearbyDrivers` carries:
+
+| Field | Type | Description |
+|---|---|---|
+| `conductorId` | `string` | Matches the driver's `UserProfile.id`. |
+| `nombre` | `string` | Display name shown on the map marker. |
+| `coords` | `Coordinates` | Last known `{ lat, lng }` position. |
+| `estado` | `'disponible' \| 'ocupado' \| 'inactivo'` | Operational status — drives marker color on the map. |
+| `lastUpdate` | `number` | `Date.now()` timestamp from the last `updateNearbyDriver` call. Use this to prune stale entries. |
+
+## Actions
+
+| Action | Signature | Description |
+|---|---|---|
+| `setUserCoords` | `(coords: Coordinates) => void` | Overwrites the user's current coordinates. Called by the `useLocation` hook on each location poll. |
+| `setCurrentSector` | `(sectorId: string) => void` | Sets the sector ID derived from the current coordinates. |
+| `updateNearbyDriver` | `(driver: NearbyDriver) => void` | Upserts a driver entry into `nearbyDrivers` and stamps `lastUpdate` with the current time. |
+| `removeNearbyDriver` | `(conductorId: string) => void` | Removes a driver from the map when they go offline or disconnect. |
+| `clearNearbyDrivers` | `() => void` | Clears all driver entries. Call when the user logs out or Socket.io disconnects. |
+| `setPermission` | `(hasPermission: boolean) => void` | Stores the result of the `expo-location` permission request. |
+| `setTracking` | `(isTracking: boolean) => void` | Toggles the tracking flag. `true` when the location subscription is active. |
+
+## Usage with driver location broadcasting
+
+Drivers share their position over Socket.io at a regular interval. The update loop reads coordinates directly from the store, ensuring the socket always emits the freshest value without needing its own location subscription:
+
+```typescript
+const coords = useLocationStore((state) => state.userCoords);
+const { updateLocation } = useSocket();
+
+// Called every LOCATION_CONFIG.driverUpdateIntervalMs
+useEffect(() => {
+  if (!coords) return;
+
+  const interval = setInterval(() => {
+    updateLocation('playa', coords, 'disponible');
+  }, LOCATION_CONFIG.driverUpdateIntervalMs);
+
+  return () => clearInterval(interval);
+}, [coords, updateLocation]);
+```
+
+`updateLocation` emits a `conductor:ubicacion` event to the server, which then broadcasts the new position to all passenger clients subscribed to that sector. Those clients call `updateNearbyDriver` when they receive the event, keeping the `nearbyDrivers` map up to date in real time.
+
+<Tip>
+  Always update `useLocationStore` via the `useLocation` hook (`src/hooks/useLocation.ts`), which handles `expo-location` permission requests, background/foreground subscription lifecycle, and polling interval cleanup. Calling `setUserCoords` manually is only appropriate in tests or one-off utility scripts.
+</Tip>

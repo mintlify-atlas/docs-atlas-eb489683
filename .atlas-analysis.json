@@ -1,0 +1,139 @@
+{
+  "projectType": "saas",
+  "projectName": "CruciDrive",
+  "projectDescription": "A hyperlocal tricimoto transport platform for Crucita, Ecuador, connecting passengers and drivers in real time via GPS tracking, Socket.io chat, and a role-based REST API.",
+  "theme": "luma",
+  "primaryColor": "#0D9488",
+  "lightColor": "#14B8A6",
+  "darkColor": "#0B0F19",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Overview",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/roles",
+              "concepts/ride-lifecycle",
+              "concepts/geolocation",
+              "concepts/realtime-chat"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Backend API",
+        "groups": [
+          {
+            "group": "Authentication",
+            "pages": [
+              "api/auth-overview",
+              "api/register-profile"
+            ]
+          },
+          {
+            "group": "Rides",
+            "pages": [
+              "api/request-ride",
+              "api/accept-ride",
+              "api/update-ride-status"
+            ]
+          },
+          {
+            "group": "Chat",
+            "pages": [
+              "api/chat-history"
+            ]
+          },
+          {
+            "group": "WebSockets",
+            "pages": [
+              "api/websocket-overview",
+              "api/websocket-events"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Frontend SDK",
+        "groups": [
+          {
+            "group": "Setup",
+            "pages": [
+              "frontend/setup",
+              "frontend/configuration"
+            ]
+          },
+          {
+            "group": "Hooks",
+            "pages": [
+              "frontend/hooks/use-supabase-auth",
+              "frontend/hooks/use-socket",
+              "frontend/hooks/use-tariff",
+              "frontend/hooks/use-location"
+            ]
+          },
+          {
+            "group": "State Stores",
+            "pages": [
+              "frontend/stores/auth-store",
+              "frontend/stores/ride-store",
+              "frontend/stores/location-store"
+            ]
+          },
+          {
+            "group": "Design System",
+            "pages": [
+              "frontend/design-system",
+              "frontend/components"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Real-time GPS tracking of tricimoto drivers via Socket.io sector rooms",
+    "Role-based access control (passenger, driver, admin) enforced on every REST endpoint and WebSocket connection",
+    "Full ride lifecycle management: solicitado → aceptado → en_curso → finalizado/cancelado",
+    "Automatic chat thread creation when a driver accepts a ride, with Row Level Security enforced at the database level",
+    "Phone-based OTP authentication via Supabase Auth (SMS sign-in, no passwords)",
+    "Fixed-price tariff system based on predefined geographic sectors of Crucita",
+    "Glassmorphic UI design system with translucent cards, backdrop blur, and 60fps Reanimated animations",
+    "Panic (SOS) button with animated pulse effect for passenger safety",
+    "Dual transport layer: REST API for transactional operations + WebSockets for live events",
+    "PostGIS spatial columns for efficient geofence queries on driver locations"
+  ],
+  "publicApiSurface": [
+    "POST /api/auth/registro — register a user profile (passenger or driver)",
+    "POST /api/viajes/solicitar — create a ride request (passenger only)",
+    "POST /api/viajes/aceptar — accept a pending ride (driver only)",
+    "PATCH /api/viajes/:id/estado — update ride state (en_curso, finalizado, cancelado)",
+    "GET /api/chats/:threadId/mensajes — fetch chat message history for a ride thread",
+    "Socket event: join_sector — subscribe to a geographic sector room",
+    "Socket event: update_location — broadcast driver GPS coordinates to sector room",
+    "Socket event: join_chat — join a ride-specific chat room",
+    "Socket event: send_message — send a real-time chat message",
+    "Socket event (server→client): location_updated — receive driver location updates",
+    "Socket event (server→client): message_received — receive incoming chat messages",
+    "useSupabaseAuth() — hook: sendOtp, verifyOtp, registerProfile, signOut",
+    "useSocket() — hook: joinSector, updateLocation, joinChat, sendMessage, onEvent",
+    "useTariff(originSectorId, destinationSectorId) — hook: formattedPrice, formattedTime, formattedDistance",
+    "useAuthStore — Zustand store: session, user, profile, setSession, clearSession",
+    "useRideStore — Zustand store: activeRide, setRideStatus, setDriver, clearRide",
+    "useLocationStore — Zustand store: location state and updates",
+    "SECTORS — constant array of 5 geographic sectors in Crucita",
+    "TARIFFS — constant array of 10 fixed-price route tariff entries",
+    "findTariff(originId, destinationId) — bidirectional tariff lookup utility",
+    "findNearestSector(lat, lng) — nearest sector from GPS coordinates"
+  ]
+}

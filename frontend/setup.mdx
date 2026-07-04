@@ -1,0 +1,118 @@
+---
+title: "Setting up the CruciDrive frontend with Expo"
+sidebarTitle: "Setup"
+description: "Install and configure the CruciDrive React Native (Expo) frontend, including dependencies, environment variables, and running on iOS, Android, and web."
+---
+
+The CruciDrive frontend is an **Expo 57 / React Native 0.86** app built with TypeScript. It targets iOS, Android, and Web simultaneously through Expo Router's file-based navigation system. State is managed with Zustand, real-time communication runs over Socket.io, and authentication is provided by Supabase Auth with phone OTP.
+
+## Prerequisites
+
+Before installing, make sure the following tools are available on your machine:
+
+- **Node.js LTS** (v20 or later recommended)
+- **Expo CLI** — install globally if you haven't already:
+
+```bash
+npm install -g expo-cli
+```
+
+- A **physical device** with the [Expo Go](https://expo.dev/client) app installed, or a configured iOS Simulator / Android Emulator
+- Access to the backend `.env` values (Supabase URL, anon key, API base URL)
+
+## Installation
+
+<Steps>
+  <Step title="Navigate to the frontend directory">
+    From the repo root, change into the frontend folder:
+
+    ```bash
+    cd frontend
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    <CodeGroup>
+      ```bash npm
+      npm install
+      ```
+
+      ```bash yarn
+      yarn install
+      ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Create your .env file">
+    Copy the provided template and fill in your credentials:
+
+    ```bash
+    cp .env.example .env
+    ```
+
+    Then open `.env` and supply real values for each `EXPO_PUBLIC_` variable. See [Configuration](/frontend/configuration) for a full description of every variable.
+  </Step>
+
+  <Step title="Start the development server">
+    <CodeGroup>
+      ```bash Expo (interactive)
+      expo start
+      ```
+
+      ```bash Android
+      expo start --android
+      ```
+
+      ```bash iOS
+      expo start --ios
+      ```
+
+      ```bash Web
+      expo start --web
+      ```
+    </CodeGroup>
+
+    Scan the QR code with Expo Go (Android) or the Camera app (iOS) to open the app on a physical device.
+  </Step>
+</Steps>
+
+## Key dependencies
+
+| Package | Version | Purpose |
+|---|---|---|
+| `expo` | ~57.0.1 | Managed workflow runtime |
+| `expo-router` | ~57.0.2 | File-based navigation |
+| `react-native` | 0.86.0 | Mobile framework |
+| `@supabase/supabase-js` | ^2.49.0 | Auth & database client |
+| `socket.io-client` | ^4.8.0 | Real-time WebSocket communication |
+| `zustand` | ^5.0.0 | Lightweight state management |
+| `expo-blur` | ~57.0.0 | Backdrop blur for glassmorphism UI |
+| `react-native-reanimated` | 4.5.0 | 60 fps declarative animations |
+| `react-native-maps` | 1.27.2 | Interactive map component |
+| `expo-location` | ~57.0.1 | Device GPS access |
+
+## App structure
+
+CruciDrive uses Expo Router's file-based routing. Routes are organized into two authenticated groups — `(passenger)` and `(driver)` — gated by an `(auth)` flow:
+
+```
+frontend/app/
+  _layout.tsx          # Root layout — fonts, splash screen, auth gate
+  index.tsx            # Entry redirect → login or home
+  (auth)/
+    login.tsx          # Phone OTP login screen
+  (app)/
+    _layout.tsx        # Authenticated layout — socket provider
+    (passenger)/
+      index.tsx        # Passenger map screen
+      chat.tsx         # In-ride chat
+      profile.tsx      # Profile screen
+    (driver)/
+      index.tsx        # Driver console
+      chat.tsx         # In-ride chat
+      profile.tsx      # Profile screen
+```
+
+<Note>
+  The `app.json` registers `scheme: "crucidrive"` for deep linking. This means external links like `crucidrive://` will open the app directly and can route to specific screens. This scheme is also used by `expo-linking` when handling OAuth or notification deep links.
+</Note>

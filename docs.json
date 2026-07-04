@@ -1,72 +1,116 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mintlify Starter Kit",
+  "name": "CruciDrive",
+  "theme": "luma",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
-  },
-  "favicon": "/favicon.svg",
-  "navigation": {
-    "pages": [
-      {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "quickstart"
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
+    "primary": "#0D9488",
+    "light": "#14B8A6",
+    "dark": "#0B0F19"
   },
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://app.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/DavidCevallos15/Crucidrive---APP"
     }
-  },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
-    ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/DavidCevallos15/Crucidrive---APP"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Overview",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/roles",
+              "concepts/ride-lifecycle",
+              "concepts/geolocation",
+              "concepts/realtime-chat"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Backend API",
+        "groups": [
+          {
+            "group": "Authentication",
+            "pages": [
+              "api/auth-overview",
+              "api/register-profile"
+            ]
+          },
+          {
+            "group": "Rides",
+            "pages": [
+              "api/request-ride",
+              "api/accept-ride",
+              "api/update-ride-status"
+            ]
+          },
+          {
+            "group": "Chat",
+            "pages": [
+              "api/chat-history"
+            ]
+          },
+          {
+            "group": "WebSockets",
+            "pages": [
+              "api/websocket-overview",
+              "api/websocket-events"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Frontend SDK",
+        "groups": [
+          {
+            "group": "Setup",
+            "pages": [
+              "frontend/setup",
+              "frontend/configuration"
+            ]
+          },
+          {
+            "group": "Hooks",
+            "pages": [
+              "frontend/hooks/use-supabase-auth",
+              "frontend/hooks/use-socket",
+              "frontend/hooks/use-tariff",
+              "frontend/hooks/use-location"
+            ]
+          },
+          {
+            "group": "State Stores",
+            "pages": [
+              "frontend/stores/auth-store",
+              "frontend/stores/ride-store",
+              "frontend/stores/location-store"
+            ]
+          },
+          {
+            "group": "Design System",
+            "pages": [
+              "frontend/design-system",
+              "frontend/components"
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

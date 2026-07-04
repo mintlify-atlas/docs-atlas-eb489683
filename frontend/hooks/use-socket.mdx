@@ -1,0 +1,145 @@
+---
+title: "useSocket — real-time Socket.io connection hook"
+sidebarTitle: "useSocket"
+description: "React hook that manages the Socket.io WebSocket lifecycle with auto-connect, JWT auth, typed emit helpers, and server event subscription for GPS and chat."
+---
+
+`useSocket` manages a single Socket.io connection per authenticated session. The socket auto-connects when a valid session is present in the Zustand store and disconnects automatically on logout. It exposes typed emit helpers for all client-to-server events — GPS location updates, sector subscriptions, and chat messages — plus a generic `onEvent` subscriber for server-to-client events.
+
+## Typed event interfaces
+
+The hook is fully typed using two interfaces that mirror the server's event contract:
+
+```typescript
+/** Events the client can emit to the server */
+interface ClientEvents {
+  join_sector:     (data: { sectorId: string }) => void;
+  update_location: (data: {
+    sectorId: string;
+    coords: { lat: number; lng: number };
+    estado: string;
+  }) => void;
+  join_chat:    (data: { threadId: string }) => void;
+  send_message: (data: { threadId: string; content: string }) => void;
+}
+
+/** Events the server can emit to the client */
+interface ServerEvents {
+  location_updated: (data: {
+    conductorId: string;
+    nombre:      string;
+    coords:      { lat: number; lng: number };
+    estado:      string;
+  }) => void;
+  message_received: (data: {
+    id:         string;
+    thread_id:  string;
+    sender_id:  string;
+    content:    string;
+    created_at: string;
+    perfiles:   { nombre: string; rol: string };
+  }) => void;
+  error_message: (message: string) => void;
+}
+```
+
+## Return values
+
+| Property | Type | Description |
+|---|---|---|
+| `socket` | `Socket \| null` | Raw Socket.io socket instance — use for advanced event handling |
+| `isConnected` | `boolean` | `true` when the socket is currently connected to the server |
+| `joinSector(sectorId)` | `(sectorId: string) => void` | Emits `join_sector` — subscribes to GPS updates for a sector |
+| `updateLocation(sectorId, coords, estado)` | `(sectorId: string, coords: { lat: number; lng: number }, estado: string) => void` | Emits `update_location` — drivers only |
+| `joinChat(threadId)` | `(threadId: string) => void` | Emits `join_chat` — subscribes to a ride's chat room |
+| `sendMessage(threadId, content)` | `(threadId: string, content: string) => void` | Emits `send_message` to a chat thread |
+| `onEvent(event, handler)` | `<K extends keyof ServerEvents>(event: K, handler: ServerEvents[K]) => () => void` | Registers a typed server-event listener; returns an unsubscribe function |
+
+## Connection lifecycle
+
+The hook stores the socket in a `useRef` so it persists across renders without triggering re-renders. A single `useEffect` keyed to `session?.access_token` drives the entire lifecycle:
+
+```typescript
+useEffect(() => {
+  const token = session?.access_token;
+
+  if (!token) {
+    // No active session — disconnect if a stale socket exists
+    if (socketRef.current?.connected) {
+      socketRef.current.disconnect();
+    }
+    return;
+  }
+
+  // Create a new authenticated connection
+  const socket = io(SOCKET_CONFIG.url, {
+    auth: { token },
+    reconnection:        SOCKET_CONFIG.reconnection,
+    reconnectionAttempts: SOCKET_CONFIG.reconnectionAttempts,
+    reconnectionDelay:   SOCKET_CONFIG.reconnectionDelay,
+    timeout:             SOCKET_CONFIG.connectionTimeout,
+    transports: ['websocket'],
+  });
+
+  socketRef.current = socket;
+
+  // Cleanup on unmount or token change
+  return () => {
+    socket.removeAllListeners();
+    socket.disconnect();
+    socketRef.current = null;
+  };
+}, [session?.access_token]);
+```
+
+When a user logs out, `useSupabaseAuth.signOut()` clears the Zustand session, `session?.access_token` becomes `undefined`, and the effect cleanup fires — disconnecting the socket cleanly.
+
+## GPS tracking (driver)
+
+```typescript
+const { joinSector, updateLocation } = useSocket();
+
+useEffect(() => {
+  // Subscribe to the sector to broadcast presence
+  joinSector('playa');
+}, []);
+
+// Called on a setInterval every LOCATION_CONFIG.driverUpdateIntervalMs (5 000 ms)
+const pushLocation = () => {
+  updateLocation(
+    'playa',
+    { lat: -1.0470, lng: -80.5485 },
+    'disponible'
+  );
+};
+```
+
+<Warning>
+  `updateLocation` is validated server-side against the user's role. If a non-conductor account emits `update_location`, the server rejects it and returns an `error_message` event with a descriptive string. Listen for `error_message` during development to catch this quickly.
+</Warning>
+
+## Chat usage (passenger)
+
+```typescript
+const { joinChat, sendMessage, onEvent } = useSocket();
+
+useEffect(() => {
+  joinChat(threadId);
+
+  // Subscribe to incoming messages
+  const unsub = onEvent('message_received', (msg) => {
+    setMessages((prev) => [...prev, msg]);
+  });
+
+  return unsub; // automatically unregisters the listener on unmount
+}, [threadId]);
+
+// Send a message on button press
+const handleSend = (text: string) => {
+  sendMessage(threadId, text);
+};
+```
+
+<Tip>
+  Always call `onEvent` inside a `useEffect` and return the unsubscribe function it provides. Because `socketRef.current` can be replaced when the session token rotates, returning the cleanup function ensures the old listener is removed before a new one is attached — preventing duplicate message handlers and memory leaks.
+</Tip>

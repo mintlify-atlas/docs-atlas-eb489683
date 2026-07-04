@@ -1,0 +1,136 @@
+---
+title: "CruciDrive WebSocket connection and authentication guide"
+sidebarTitle: "WS Overview"
+description: "CruciDrive uses Socket.io 4 over WebSockets for real-time GPS tracking and in-ride chat. Connections require a valid Supabase JWT passed in the handshake auth object."
+---
+
+Socket.io powers two real-time modules in CruciDrive: sector-based GPS location broadcasting and in-ride chat messaging. Every feature that updates without a page refresh — a driver's pin moving on the map, a chat bubble appearing — is delivered over a single persistent Socket.io connection that both the passenger and driver apps share. All connections must authenticate with a valid Supabase JWT before the server permits any events.
+
+## Connecting
+
+The `useSocket` hook in `frontend/src/hooks/useSocket.ts` manages the lifecycle of the connection. It reads the Supabase session from the `useAuthStore` and creates a new socket whenever an `access_token` is present, disconnecting automatically when the session expires.
+
+```typescript
+import { io } from 'socket.io-client';
+
+const socket = io('http://localhost:3000', {
+  auth: { token: accessToken },  // Supabase JWT
+  reconnection: true,
+  reconnectionAttempts: 5,
+  reconnectionDelay: 2000,
+  timeout: 10000,
+  transports: ['websocket'],
+});
+```
+
+<Warning>
+  Always specify `transports: ['websocket']` and never rely on the default
+  polling fallback. Allowing long-polling introduces CORS preflight failures on
+  mobile networks in Crucita and doubles the connection overhead for drivers
+  operating on limited data plans.
+</Warning>
+
+<Note>
+  The socket URL is read from the `EXPO_PUBLIC_SOCKET_URL` environment variable
+  via the `SOCKET_CONFIG.url` constant in `frontend/src/constants/config.ts`.
+  In local development this defaults to `http://localhost:3000`. Set
+  `EXPO_PUBLIC_SOCKET_URL` in your `.env` file to point at the production
+  backend before building a release.
+</Note>
+
+## Authentication flow
+
+Before any client can emit or receive events, the server runs an `io.use()` middleware that validates the Supabase JWT. The steps are:
+
+1. **Token extraction** — the middleware reads `socket.handshake.auth.token`. If that value is absent it falls back to the `Authorization` header (`Bearer <token>` format).
+2. **JWT verification** — `supabase.auth.getUser(token)` is called. Supabase validates the token signature and expiry server-side.
+3. **Profile hydration** — the middleware queries `public.perfiles` for the authenticated user's `rol` and `nombre`, then attaches the full identity object to the socket:
+
+```js
+socket.user = {
+  id: user.id,
+  email: user.email,
+  rol: perfil?.rol || 'pasajero',
+  nombre: perfil?.nombre || ''
+};
+```
+
+4. **Failure path** — if the token is missing, invalid, or expired, the server calls `next(new Error(...))`. Socket.io translates this into a `connect_error` event on the client and immediately closes the handshake. No events are reachable until a valid token is supplied.
+
+## Connection events
+
+Register these listeners immediately after creating the socket to monitor connection health:
+
+```typescript
+// connect — socket is authenticated and ready
+socket.on('connect', () => {
+  console.log('[Socket.io] Conectado al servidor:', socket.id);
+});
+
+// disconnect — connection dropped (network, server restart, etc.)
+socket.on('disconnect', (reason) => {
+  console.log('[Socket.io] Desconectado:', reason);
+});
+
+// connect_error — authentication failure or unreachable server
+socket.on('connect_error', (error) => {
+  console.error('[Socket.io] Error de conexión:', error.message);
+});
+
+// error_message — server rejected a specific event (see WS Events)
+socket.on('error_message', (message: string) => {
+  console.warn('[Socket.io] Error del servidor:', message);
+});
+```
+
+| Event | Direction | When it fires |
+|-------|-----------|---------------|
+| `connect` | server → client | Handshake succeeded; `socket.id` is assigned |
+| `disconnect` | server → client | Connection closed for any reason; `reason` string describes the cause |
+| `connect_error` | server → client | Handshake failed — bad token, server down, or network error |
+| `error_message` | server → client | A specific event was rejected by server-side business logic |
+
+## Room architecture
+
+CruciDrive uses two families of Socket.io rooms to target messages precisely, avoiding broadcast storms that would drain data budgets on mobile:
+
+**`sector:{sectorId}` — GPS sector rooms**
+
+Clients call `join_sector` to subscribe to driver location updates for a named zone in Crucita. The available sectors match the geographic divisions of the town:
+
+- `sector:playa`
+- `sector:centro`
+- `sector:las_gilces`
+- `sector:los_arenales`
+- `sector:san_jacinto`
+
+When a driver emits `update_location`, the server writes the new position to `tricimotos.ubicacion_actual` and then calls `socket.to('sector:{sectorId}').emit('location_updated', ...)` — only passengers in that sector room receive the update.
+
+**`chat:{threadId}` — ride-specific private chat rooms**
+
+When a ride is accepted, a thread is created and both the passenger and driver are added to `thread_members`. Each party calls `join_chat` to enter the room `chat:{threadId}`. Messages sent via `send_message` are broadcast to the entire room with `io.to(room).emit(...)`, which includes the sender — so both parties always see the same message state without any client-side deduplication logic.
+
+Using rooms means a passenger in `sector:playa` never receives GPS pings from `sector:centro`, and a user in one chat thread never sees messages from another ride. This targeted delivery keeps per-device data consumption well within the 15 MB per-shift budget enforced by the app.
+
+## Reconnection behavior
+
+The `SOCKET_CONFIG` constants configure automatic reconnection:
+
+| Parameter | Value | Meaning |
+|-----------|-------|---------|
+| `reconnection` | `true` | Automatically attempt to reconnect on drop |
+| `reconnectionAttempts` | `5` | Give up after 5 consecutive failed attempts |
+| `reconnectionDelay` | `2000 ms` | Wait 2 seconds between each attempt |
+| `connectionTimeout` | `10000 ms` | Fail the initial handshake after 10 seconds |
+
+After a successful reconnect the socket receives a new `socket.id` and is no longer in any rooms. Your components must re-emit `join_sector` and `join_chat` to restore subscriptions — the server has no memory of previous room membership for a given connection.
+
+```typescript
+socket.on('connect', () => {
+  // Re-join rooms after reconnect
+  socket.emit('join_sector', { sectorId: currentSector });
+  if (activeThreadId) {
+    socket.emit('join_chat', { threadId: activeThreadId });
+  }
+});
+```

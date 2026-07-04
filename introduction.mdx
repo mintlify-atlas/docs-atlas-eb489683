@@ -1,0 +1,86 @@
+---
+title: "CruciDrive: Hyperlocal Transport Platform Overview"
+sidebarTitle: "Introduction"
+description: "CruciDrive modernizes tricimoto dispatch in Crucita, Ecuador with proximity-based ride matching, real-time GPS, and encrypted passenger safety features."
+---
+
+CruciDrive is a hyperlocal mobility platform built specifically for Crucita, a coastal parish in Manabí, Ecuador, where tricimoto taxis are the primary form of public transport. Instead of the longstanding practice of drivers aimlessly patrolling streets in search of passengers — a habit locals call **"vuelteo"** — CruciDrive centralizes dispatch through a demand-driven mobile app that connects passengers and drivers instantly, using geographic proximity as the sole matching criterion.
+
+---
+
+## The Problem
+
+Tricimoto transport in Crucita operates without any digital infrastructure. Drivers burn fuel and wear down their vehicles cruising unpredictably through the parish, while passengers stand on street corners with no way to know if or when a ride will arrive. This creates three compounding issues:
+
+- **Citizen safety gaps** — There is no auditable record of which driver carried which passenger, on which route, or at what time. In the event of an incident, tracing a trip is impossible.
+- **Economic inefficiency** — Continuous random patrolling ("vuelteo") generates excessive fuel consumption and accelerated mechanical wear, eating directly into drivers' daily margins.
+- **No accountability layer** — Neither the municipality nor a cooperative has visibility into fleet location, trip volume, or driver behavior in real time.
+
+---
+
+## The Solution
+
+CruciDrive replaces vuelteo with a structured, demand-driven dispatch system built on four core capabilities:
+
+- **Proximity-based ride matching** — When a passenger requests a trip, the system surfaces the nearest available tricimoto drivers, eliminating unnecessary patrolling.
+- **Phone OTP authentication** — All users — passengers and drivers alike — verify their identity via SMS one-time password through Supabase Auth, requiring no email address or username.
+- **Real-time GPS tracking** — Drivers broadcast their live coordinates via Socket.io WebSockets, and the passenger's map updates continuously during the ride.
+- **Fixed tariffs** — Fares are set at the time of ride creation and stored in the database, eliminating negotiation friction and ensuring transparency.
+- **In-ride chat** — A per-trip chat thread (Socket.io rooms backed by Supabase) lets passenger and driver coordinate without exchanging personal phone numbers.
+
+<Note>
+  CruciDrive is built in strict compliance with Ecuador's **Ley Orgánica de Protección de Datos Personales (LOPDP)**. Sensitive user data is encrypted with AES-256, explicit consent is collected at registration, and GPS tracking is only active during confirmed rides. Users may withdraw consent at any time from within the app.
+</Note>
+
+---
+
+## Who Is It For?
+
+<CardGroup cols={3}>
+  <Card title="Passenger" icon="user">
+    Opens the app, taps **Request Ride**, and sees nearby available tricimotos on a live map. Receives a fixed fare before confirming, tracks the driver in real time, and can chat directly with the driver during the trip.
+  </Card>
+  <Card title="Driver" icon="car">
+    Registers their tricimoto (plate number), goes online with a single tap, and receives proximity-based ride requests. Broadcasts live GPS coordinates to the platform and earns trips without aimless street patrolling.
+  </Card>
+  <Card title="Administrator" icon="shield-halved">
+    Has elevated role permissions to oversee fleet status, review trip history, manage driver profiles, and monitor platform health. Admin accounts are assigned directly in the database via the `rol` field in the `perfiles` table.
+  </Card>
+</CardGroup>
+
+---
+
+## Tech Stack
+
+| Layer | Technology | Role in CruciDrive |
+|---|---|---|
+| **Mobile App** | React Native (Expo 57) | Cross-platform iOS and Android client |
+| **Backend API** | Node.js + Express 5 | REST endpoints and Socket.io server |
+| **Database** | PostgreSQL + PostGIS | Relational data and geospatial proximity queries |
+| **Auth** | Supabase Auth | Phone OTP login and JWT issuance |
+| **Real-time** | Socket.io 4 | Live GPS broadcasts and in-ride chat |
+| **State Management** | Zustand 5 | Frontend global state (rides, user session, map) |
+| **UI System** | NativeWind + expo-blur | Glassmorphic design — translucent cards, backdrop blur, 60 fps animations via Reanimated |
+
+---
+
+## Project Status
+
+CruciDrive is currently in its **MVP / Technical Proof of Concept** phase. Development follows a closed **Scrum timeline of 6 months (24 weeks)**, organized into **12 two-week sprints**. Drivers self-register by validating their identity over SMS and explicitly accepting the GPS tracking terms of service.
+
+A **field pilot** is planned for Month 5, deploying the platform with 10 real tricimotos in Crucita parish to evaluate usability, acceptance, and real-world performance before a broader rollout.
+
+The initial infrastructure cost is **$0**, leveraging the Supabase free tier and Render's free hosting tier. Long-term sustainability is funded through a micro-technology fee of $5/month per active tricimoto unit.
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Clone the monorepo, configure your environment variables, and have the backend and Expo app running locally in minutes.
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture">
+    Explore the monorepo structure, data flow diagrams, database schema, and security model in depth.
+  </Card>
+</CardGroup>

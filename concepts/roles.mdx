@@ -1,0 +1,150 @@
+---
+title: "User roles and role-based access control in CruciDrive"
+sidebarTitle: "Roles & Access"
+description: "CruciDrive enforces three roles — pasajero, conductor, and admin — validated on every REST request and WebSocket connection via Supabase JWT and role middleware."
+---
+
+CruciDrive's authorization model is built on three mutually exclusive roles stored in the `public.perfiles` table: **pasajero** (rider), **conductor** (driver), and **admin** (administrator). Every REST request passes through two chained middlewares — `authMiddleware` (validates the JWT) and `roleMiddleware` (checks the role) — before reaching a controller. WebSocket connections are authenticated through an equivalent `io.use()` guard inside `socketHandler.js`, ensuring that role-gated behavior is consistent across both transport layers.
+
+## Role Definitions
+
+| Role | Description | Key Capabilities |
+|---|---|---|
+| `pasajero` | An end-user who requests tricimoto rides | Request rides, activate panic button, view live driver map |
+| `conductor` | A verified tricimoto driver | Accept ride requests, broadcast GPS position, update ride status |
+| `admin` | Platform administrator | Approve drivers, receive panic alerts, audit ride logs |
+
+## How roles are stored
+
+Each user's role is stored in the `public.perfiles` table, which extends Supabase's `auth.users` with business-logic fields. A PostgreSQL `CHECK` constraint is applied to the `rol` column to prevent any invalid value from ever reaching the database:
+
+```sql
+rol VARCHAR CHECK (rol IN ('pasajero', 'conductor', 'admin'))
+```
+
+The `perfiles` table also stores `nombre`, `telefono` (UNIQUE), and `activo` alongside the role. When an `auth.users` record is deleted, the corresponding `perfiles` row is removed automatically via `ON DELETE CASCADE`. If a `viajes` row references a deleted user, the FK is preserved via `ON DELETE SET NULL` to maintain historical records.
+
+## Authentication middleware
+
+`authMiddleware.js` is the first checkpoint on every protected route. It reads the `Authorization` header, extracts the Bearer token, and validates it against Supabase Auth. If the token is valid, the full Supabase user object is attached to `req.user` and the request continues to the next handler.
+
+```js
+const authMiddleware = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return errorResponse(res, 401, 'No autorizado. Se requiere un token de tipo Bearer en la cabecera.');
+    }
+
+    const token = authHeader.split(' ')[1];
+
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+
+    if (error || !user) {
+      return errorResponse(res, 401, 'Token inválido o expirado.', error ? error.message : null);
+    }
+
+    req.user = user;
+    next();
+  } catch (err) {
+    errorResponse(res, 500, 'Error interno en el middleware de autenticación.', err.message);
+  }
+};
+```
+
+<Warning>
+All routes except the public OTP login and registration endpoints (`POST /api/auth/registro`) are protected by `authMiddleware`. Requests that omit or send an expired token receive a `401 Unauthorized` response immediately, before any controller logic executes.
+</Warning>
+
+## Role middleware
+
+`roleMiddleware` is a factory function that accepts an array of allowed roles and returns an Express `RequestHandler`. After `authMiddleware` has confirmed the JWT is valid, `roleMiddleware` performs a single lookup against `public.perfiles`, checks whether the user's `rol` is in the `allowedRoles` array, and — if authorized — attaches the resolved role to `req.user.rol` for downstream controllers to read.
+
+```js
+const roleMiddleware = (allowedRoles) => {
+  return async (req, res, next) => {
+    try {
+      if (!req.user || !req.user.id) {
+        return errorResponse(res, 401, 'Usuario no autenticado en el contexto de la petición.');
+      }
+
+      const { data: perfil, error } = await supabase
+        .from('perfiles')
+        .select('rol')
+        .eq('id', req.user.id)
+        .single();
+
+      if (error || !perfil) {
+        return errorResponse(res, 404, 'No se encontró el perfil de usuario para validar el rol.', error ? error.message : null);
+      }
+
+      if (!allowedRoles.includes(perfil.rol)) {
+        return errorResponse(res, 403, `Acceso denegado. Se requiere uno de los siguientes roles: [${allowedRoles.join(', ')}]. Tu rol actual es: ${perfil.rol}`);
+      }
+
+      req.user.rol = perfil.rol;
+      next();
+    } catch (err) {
+      errorResponse(res, 500, 'Error interno en el middleware de roles.', err.message);
+    }
+  };
+};
+```
+
+The two middlewares are composed inline on each route definition, making the access policy visible directly in the router file:
+
+```js
+// Only a pasajero may open a new ride request
+router.post('/solicitar', authMiddleware, roleMiddleware(['pasajero']), solicitarViaje);
+
+// Only a conductor may accept a pending ride
+router.post('/aceptar', authMiddleware, roleMiddleware(['conductor']), aceptarViaje);
+```
+
+A `403 Forbidden` response is returned if the user is authenticated but lacks the required role — for example, if a `conductor` attempts to call `POST /api/viajes/solicitar`.
+
+## WebSocket authentication
+
+Socket.io connections undergo the same JWT validation as REST requests. The `io.use()` middleware inside `initSocketHandler` intercepts every new connection before any event handler fires. The token can be supplied either through `socket.handshake.auth.token` (the recommended approach) or the `Authorization` header:
+
+```js
+io.use(async (socket, next) => {
+  try {
+    const token = socket.handshake.auth?.token ||
+                  socket.handshake.headers?.authorization?.split(' ')[1];
+
+    if (!token) {
+      return next(new Error('Error de autenticación: Token no suministrado.'));
+    }
+
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+
+    if (error || !user) {
+      return next(new Error('Error de autenticación: Token inválido o expirado.'));
+    }
+
+    const { data: perfil } = await supabase
+      .from('perfiles')
+      .select('rol, nombre')
+      .eq('id', user.id)
+      .single();
+
+    socket.user = {
+      id: user.id,
+      email: user.email,
+      rol: perfil?.rol || 'pasajero',
+      nombre: perfil?.nombre || ''
+    };
+
+    next();
+  } catch (err) {
+    next(new Error('Error interno del middleware de WebSockets.'));
+  }
+});
+```
+
+After a successful handshake, `socket.user` is available to every event handler on that connection, including `update_location` (restricted to `conductor`) and `join_chat`.
+
+<Note>
+The `admin` role is fully defined in the database schema and enforced by the `CHECK` constraint, but the admin web panel is planned for a future phase. No `roleMiddleware(['admin'])` routes exist in the current MVP.
+</Note>

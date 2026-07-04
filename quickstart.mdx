@@ -1,47 +1,182 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get started with CruciDrive in minutes"
+sidebarTitle: "Quickstart"
+description: "Clone the CruciDrive monorepo, configure environment variables, and run the backend server and Expo app locally with this step-by-step guide."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
+This guide walks you through getting both the **backend server** and the **Expo mobile app** running on your local machine. By the end, you will have a live Express + Socket.io API connected to Supabase, and an Expo dev client ready to run on a simulator or physical device — all from a single monorepo clone.
 
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+<Note>
+  CruciDrive uses the **Supabase free tier** for its database, authentication, and Row Level Security policies, which means the initial infrastructure cost is **$0**. You only need a free Supabase account to follow this guide.
+</Note>
+
+---
 
 ## Prerequisites
 
-Before you begin, you must have:
+Before you begin, make sure you have the following installed and available:
 
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
+- **Node.js LTS** (v20 or higher) — [nodejs.org](https://nodejs.org/)
+- **Git** — [git-scm.com](https://git-scm.com/)
+- **Expo CLI** — install globally with `npm install -g expo-cli` or use `npx expo` for every command
+- **A Supabase project** — create a free one at [supabase.com](https://supabase.com/). You will need your project URL and anon key from **Project Settings → API**.
 
-## Get started
+---
+
+## Setup Steps
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Clone the repository">
+    Clone the CruciDrive monorepo from GitHub and navigate into the project root:
 
     ```bash
-    npm install your-package
+    git clone https://github.com/DavidCevallos15/Crucidrive---APP.git
+    cd Crucidrive---APP
     ```
+
+    The repository contains two top-level directories: `/backend` (Node.js/Express server) and `/frontend` (React Native Expo app). Each has its own `package.json` and must be configured and started independently.
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Configure backend environment variables">
+    Navigate into the backend directory and create a `.env` file. The backend requires three environment variables to boot — your Supabase project URL, the anonymous public key, and the port for the HTTP/WebSocket server:
 
     ```bash
-    your-cli init
+    cd backend
+    cp .env.example .env   # if an example file is present, otherwise create it manually
     ```
+
+    Open `.env` and set the following values:
+
+    ```ini
+    # .env — CruciDrive Backend
+
+    # Your Supabase project URL (found in Project Settings → API)
+    SUPABASE_URL=https://your-project-ref.supabase.co
+
+    # Supabase anonymous/public key (safe to expose in client-side code)
+    SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+    # Port for the Express + Socket.io HTTP server
+    PORT=3000
+    ```
+
+    <Warning>
+      Never commit your `.env` file to version control. The `.gitignore` in the backend directory excludes it by default. Use the Supabase **anon key**, not the secret `service_role` key, for this configuration.
+    </Warning>
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+  <Step title="Install dependencies and start the backend">
+    From inside the `backend/` directory, install dependencies and launch the development server using `nodemon` (which auto-restarts on file changes):
 
     ```bash
-    your-cli start
+    npm install
+    npm run dev
     ```
+
+    When the server boots successfully, you should see the following startup banner in your terminal:
+
+    ```
+    =================================================
+     Servidor de CruciDrive (REST + Sockets) corriendo
+     Puerto: 3000
+     URL local: http://localhost:3000
+    =================================================
+    ```
+
+    The server starts an HTTP server on the configured `PORT`, registers three REST route groups (`/api/auth`, `/api/viajes`, `/api/chats`), and initializes the Socket.io handler for real-time GPS and chat events — all in a single process.
+  </Step>
+
+  <Step title="Configure frontend environment variables">
+    Open a new terminal, navigate to the `frontend/` directory, and create a `.env` file for the Expo app. The frontend uses Expo's `EXPO_PUBLIC_` prefix convention so variables are safely embedded in the client bundle at build time:
+
+    ```bash
+    cd ../frontend
+    ```
+
+    Create a `.env` file with the following contents:
+
+    ```ini
+    # .env — CruciDrive Frontend (Expo)
+
+    # Base URL of the running Express backend
+    EXPO_PUBLIC_API_BASE_URL=http://localhost:3000
+
+    # Your Supabase project URL
+    EXPO_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
+
+    # Supabase anonymous/public key
+    EXPO_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+    # WebSocket server URL — typically the same as the backend URL
+    EXPO_PUBLIC_SOCKET_URL=http://localhost:3000
+    ```
+
+    <Tip>
+      When testing on a **physical Android or iOS device** on the same Wi-Fi network, replace `localhost` with your machine's local IP address (e.g., `192.168.1.x`). Devices cannot reach `localhost` on your development machine through Expo Go.
+    </Tip>
+  </Step>
+
+  <Step title="Install dependencies and start the Expo app">
+    From inside the `frontend/` directory, install dependencies and start the Expo development server:
+
+    ```bash
+    npm install
+    ```
+
+    Then choose your target platform:
+
+    <CodeGroup>
+      ```bash Expo Dev Server (QR code)
+      expo start
+      ```
+
+      ```bash Android Emulator
+      expo start --android
+      ```
+
+      ```bash iOS Simulator
+      expo start --ios
+      ```
+    </CodeGroup>
+
+    Scanning the QR code with the **Expo Go** app on your physical device will load the app immediately. For Android emulator or iOS simulator, make sure the respective tools (Android Studio / Xcode) are installed and a virtual device is running.
+  </Step>
+
+  <Step title="Verify the backend connection">
+    With the backend running, confirm the server is healthy and connected to Supabase by hitting the root endpoint. This endpoint internally calls `supabase.auth.getSession()` to verify the Supabase connection is live:
+
+    ```bash
+    curl http://localhost:3000/
+    ```
+
+    A successful response looks like:
+
+    ```json
+    {
+      "status": "ok",
+      "message": "Servidor Express de CruciDrive activo y conectado a Supabase correctamente.",
+      "timestamp": "2025-01-15T14:32:00.000Z"
+    }
+    ```
+
+    If you receive a `500` error instead, double-check that `SUPABASE_URL` and `SUPABASE_ANON_KEY` in your backend `.env` are correct and that your Supabase project is active.
+
+    <Tip>
+      The default geographic center for CruciDrive's map and geofencing logic is **Crucita, Manabí, Ecuador** — latitude `-1.0448`, longitude `-80.5432`. Any PostGIS proximity queries and default map viewport will be centered on this coordinate.
+    </Tip>
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+---
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+## What's Running
+
+After completing all steps, you have:
+
+| Process | URL | Description |
+|---|---|---|
+| Express REST API | `http://localhost:3000/api` | Auth, rides, and chat endpoints |
+| Socket.io server | `ws://localhost:3000` | Live GPS tracking and in-ride chat |
+| Expo dev server | `exp://localhost:8081` | React Native app with hot reload |
+
+From here, explore the [Architecture](/architecture) page to understand how the backend modules, database schema, and real-time infrastructure fit together.

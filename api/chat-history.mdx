@@ -1,0 +1,114 @@
+---
+title: "GET /api/chats/:threadId/mensajes — fetch chat history"
+sidebarTitle: "Chat History"
+description: "Returns all messages for a ride chat thread in chronological order. Only authorized thread members can access message history."
+---
+
+When a user opens the in-ride chat screen, this endpoint loads the full message history for the thread before live events begin streaming. Call it once on screen mount to populate prior messages, then subscribe to the `message_received` WebSocket event to receive any messages sent afterwards without re-fetching.
+
+## Access
+
+The requesting user must be authenticated via the `authMiddleware` and must be a registered member of the target thread. Membership is enforced through the `thread_members` table — if the user's ID is not present for the given `threadId`, the server returns `403` before any message data is read.
+
+## Path parameter
+
+<ParamField path="threadId" type="string" required>
+  UUID of the chat thread. This value is returned in the `aceptarViaje` response
+  when a driver accepts a ride and the thread is created. Threads are unique
+  per ride (`threads.viaje_id` is a 1:1 foreign key into `public.viajes`).
+</ParamField>
+
+## Response — 200 OK
+
+Returns an array of message objects ordered by `created_at ASC`. Each object includes a nested `perfiles` sub-object with sender profile data resolved via a Supabase join on `sender_id`.
+
+<ResponseField name="id" type="string">
+  Message UUID — primary key of the `messages` table row.
+</ResponseField>
+
+<ResponseField name="thread_id" type="string">
+  UUID of the parent chat thread. Matches the `threadId` path parameter.
+</ResponseField>
+
+<ResponseField name="sender_id" type="string">
+  UUID of the user who sent the message. Foreign key into `public.perfiles`.
+</ResponseField>
+
+<ResponseField name="content" type="string">
+  Plain-text message body. Whitespace is trimmed before storage.
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  ISO 8601 timestamp set by the database at insert time, e.g.
+  `2024-11-15T14:23:01.000Z`.
+</ResponseField>
+
+<ResponseField name="perfiles" type="object">
+  Nested sender profile resolved from the `public.perfiles` table via the
+  `sender_id` foreign key.
+
+  <Expandable title="perfiles fields">
+    <ResponseField name="nombre" type="string">
+      Full display name of the sender, e.g. `"Carlos Vera"`.
+    </ResponseField>
+
+    <ResponseField name="rol" type="string">
+      Role of the sender. One of `pasajero`, `conductor`, or `admin`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example response
+
+```json
+[
+  {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "thread_id": "b3f9a42c-...",
+    "sender_id": "a1b2c3d4-...",
+    "content": "Estoy en camino, llegaré en 3 minutos.",
+    "created_at": "2024-11-15T14:23:01.000Z",
+    "perfiles": { "nombre": "Carlos Vera", "rol": "conductor" }
+  }
+]
+```
+
+## Membership validation
+
+Before any message data is read, the controller calls the `checkThreadMembership(threadId, userId)` helper from `supabaseHelpers.js`. This function queries `public.thread_members` using a `maybeSingle()` selector — if a row matching both `thread_id` and `user_id` exists, the request proceeds; otherwise the server short-circuits with a `403`. This mirrors the Row Level Security policy on the `messages` table in Supabase, providing defense in depth at both the application and database layers.
+
+```js
+const { member, error } = await checkThreadMembership(threadId, userId);
+
+if (memberError) {
+  return errorResponse(res, 500, 'Error al verificar la afiliación al hilo de chat.', memberError.message);
+}
+
+if (!member) {
+  return errorResponse(res, 403, 'Acceso denegado. No eres miembro autorizado de este hilo de conversación.');
+}
+```
+
+## Error cases
+
+| Status | Condition |
+|--------|-----------|
+| `400`  | `threadId` is missing from the path parameters |
+| `403`  | Authenticated user is not a member of the thread (`thread_members` lookup returned no row) |
+| `500`  | Database error while executing the `thread_members` membership check |
+| `400`  | Database error while fetching messages from the `messages` table |
+
+## Example request
+
+```bash
+curl -X GET https://api.crucidrive.ec/api/chats/b3f9a42c-.../mensajes \
+  -H "Authorization: Bearer <supabase_jwt>"
+```
+
+<Tip>
+  Messages are ordered by `created_at ASC` — the oldest message is always the
+  first element in the array. Call this endpoint on screen mount to load prior
+  history, then subscribe to the `message_received` WebSocket event for all
+  subsequent messages so you never need to poll this endpoint again during an
+  active session.
+</Tip>

@@ -1,0 +1,128 @@
+---
+title: "POST /api/viajes/aceptar — accept a pending ride request"
+sidebarTitle: "Accept Ride"
+description: "Allows a conductor to claim a solicitado ride. Atomically updates the viaje, creates a chat thread, and adds both passenger and driver as thread members."
+---
+
+When a conductor accepts a ride, the server executes three sequential database operations: it updates the ride record, creates a dedicated chat thread for the trip, and registers both participants as thread members. Each step is guarded by a rollback — if thread creation fails, the ride is reverted to `"solicitado"`; if member insertion fails, the thread is deleted and the ride is reverted as well. This keeps the database consistent even under partial failures.
+
+**Access:** requires the `conductor` role. The route is protected by `authMiddleware` followed by `roleMiddleware(['conductor'])`.
+
+## Request
+
+<ParamField header="Authorization" type="string" required>
+  Bearer JWT from Supabase Auth. The authenticated user must have `rol = "conductor"` in `public.perfiles`.
+</ParamField>
+
+<ParamField body="viajeId" type="string" required>
+  UUID of the ride to accept. The ride must currently be in state `"solicitado"`.
+</ParamField>
+
+### Example request body
+
+```json
+{
+  "viajeId": "c3d4e5f6-0000-0000-0000-aabbccddeeff"
+}
+```
+
+## Transactional flow
+
+<Steps>
+  <Step title="Fetch the viaje">
+    The server looks up the ride by `viajeId` using `findViajeById`. If no record is found, it returns `404`. This also loads `pasajero_id`, which is needed for thread member insertion later.
+  </Step>
+
+  <Step title="Validate state">
+    If `viaje.estado !== 'solicitado'`, the request is rejected with `400` and the current state is included in the error message. A ride that is already `"aceptado"`, `"en_curso"`, `"finalizado"`, or `"cancelado"` cannot be accepted again.
+  </Step>
+
+  <Step title="Update the viaje">
+    Sets `conductor_id` to the authenticated conductor's user ID, changes `estado` to `"aceptado"`, and stamps `updated_at` with the current UTC timestamp.
+  </Step>
+
+  <Step title="Create the chat thread">
+    Inserts a new row into `public.threads` with the `viaje_id` reference. If this insert fails, the server rolls back step 3 — resetting `conductor_id` to `null` and `estado` to `"solicitado"` — then returns `500`.
+  </Step>
+
+  <Step title="Add thread members">
+    Inserts two rows into `public.thread_members`: one for the passenger (`viaje.pasajero_id`) and one for the conductor. If this insert fails, the server deletes the thread created in step 4, rolls back the viaje update from step 3, and returns `500`.
+  </Step>
+</Steps>
+
+## Response `200`
+
+<ResponseField name="viaje" type="object">
+  The updated ride record after acceptance.
+
+  <Expandable title="viaje fields">
+    <ResponseField name="viaje.id" type="string">
+      UUID of the accepted ride.
+    </ResponseField>
+
+    <ResponseField name="viaje.conductor_id" type="string">
+      UUID of the conductor who accepted — set in this request.
+    </ResponseField>
+
+    <ResponseField name="viaje.estado" type="string">
+      `"aceptado"` after a successful call.
+    </ResponseField>
+
+    <ResponseField name="viaje.updated_at" type="string">
+      ISO 8601 timestamp of when the acceptance was recorded.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="chat" type="object">
+  Chat thread details created during this operation.
+
+  <Expandable title="chat fields">
+    <ResponseField name="chat.threadId" type="string">
+      UUID of the newly created thread in `public.threads`. Use this ID to join the WebSocket chat room.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Error cases
+
+| HTTP status | Cause |
+|-------------|-------|
+| `400` | `viajeId` was not provided in the request body |
+| `404` | No ride found with the given `viajeId` |
+| `400` | Ride exists but `estado` is not `"solicitado"` |
+| `500` | Thread creation in `public.threads` failed — viaje rolled back to `"solicitado"` |
+| `500` | Thread member insertion in `public.thread_members` failed — thread deleted and viaje rolled back |
+
+## Full curl example
+
+```bash
+curl -X POST https://api.crucidrive.local/api/viajes/aceptar \
+  -H "Authorization: Bearer <your_access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "viajeId": "c3d4e5f6-0000-0000-0000-aabbccddeeff" }'
+```
+
+```json
+{
+  "status": "success",
+  "message": "Viaje aceptado correctamente e hilo de chat inicializado.",
+  "data": {
+    "viaje": {
+      "id": "c3d4e5f6-0000-0000-0000-aabbccddeeff",
+      "pasajero_id": "a1b2c3d4-0000-0000-0000-111122223333",
+      "conductor_id": "b9c8d7e6-0000-0000-0000-999988887777",
+      "estado": "aceptado",
+      "tarifa": 1.50,
+      "updated_at": "2024-11-15T14:25:10.000Z"
+    },
+    "chat": {
+      "threadId": "e5f6a7b8-0000-0000-0000-ccddee001122"
+    }
+  }
+}
+```
+
+<Tip>
+  Once the response arrives, the conductor app should immediately emit a `join_chat` event over the existing Socket.io connection, passing the received `threadId`. This ensures real-time messages are delivered before either participant sends the first message.
+</Tip>

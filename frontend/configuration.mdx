@@ -1,0 +1,137 @@
+---
+title: "Environment variables and configuration for CruciDrive frontend"
+sidebarTitle: "Configuration"
+description: "Configure CruciDrive's frontend via EXPO_PUBLIC_ environment variables for API base URL, Supabase credentials, Socket.io URL, and GPS update intervals."
+---
+
+All CruciDrive frontend configuration is injected through environment variables prefixed with `EXPO_PUBLIC_` so Expo can bundle them into the JavaScript bundle at build time. No credentials are hard-coded in the source; `src/constants/config.ts` reads each variable at startup and exposes typed config objects consumed throughout the app.
+
+<Warning>
+  Never commit your `.env` file to version control. The `.env.example` template is committed as a reference — copy it to `.env` locally and supply real values. The `.gitignore` already excludes `.env`.
+</Warning>
+
+## Environment variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `EXPO_PUBLIC_API_BASE_URL` | Yes | `http://localhost:3000` | Base URL of the Express backend REST API |
+| `EXPO_PUBLIC_SUPABASE_URL` | Yes | — | Your Supabase project URL (e.g. `https://xyz.supabase.co`) |
+| `EXPO_PUBLIC_SUPABASE_ANON_KEY` | Yes | — | Supabase anonymous API key — public and safe for client-side use |
+| `EXPO_PUBLIC_SOCKET_URL` | Yes | `http://localhost:3000` | Socket.io server URL (typically the same as the API base URL) |
+
+<Note>
+  The `EXPO_PUBLIC_` prefix is **required**. Any environment variable that omits this prefix is not accessible inside the Expo JavaScript bundle — it will be `undefined` at runtime, even if it is present in your `.env` file.
+</Note>
+
+### `.env` example file
+
+```bash
+# ─── CruciDrive — Frontend Environment Variables ──────────────
+# Copy this file as .env and fill in your values.
+# IMPORTANT: Never commit .env to version control.
+
+# Supabase project URL
+EXPO_PUBLIC_SUPABASE_URL=https://tu-proyecto.supabase.co
+
+# Supabase public anonymous key (NOT the service role key)
+EXPO_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+# Express backend base URL
+EXPO_PUBLIC_API_BASE_URL=http://localhost:3000
+
+# Socket.io server URL (usually the same as the backend)
+EXPO_PUBLIC_SOCKET_URL=http://localhost:3000
+```
+
+## API endpoints config
+
+The `API_CONFIG.endpoints` object in `config.ts` centralizes every REST path used by the app. This avoids scattering raw strings across components:
+
+```typescript
+export const API_CONFIG = {
+  baseUrl: getEnvVar('EXPO_PUBLIC_API_BASE_URL', 'http://localhost:3000'),
+  requestTimeout: 10000,
+  endpoints: {
+    auth: {
+      register: '/api/auth/registro',
+    },
+    rides: {
+      request:      '/api/viajes/solicitar',
+      accept:       '/api/viajes/aceptar',
+      updateStatus: (id: string) => `/api/viajes/${id}/estado`,
+    },
+    chat: {
+      messages: (threadId: string) => `/api/chats/${threadId}/mensajes`,
+    },
+  },
+} as const;
+```
+
+| Key | Path | Notes |
+|---|---|---|
+| `auth.register` | `POST /api/auth/registro` | Creates or updates a user profile |
+| `rides.request` | `POST /api/viajes/solicitar` | Passenger requests a ride |
+| `rides.accept` | `POST /api/viajes/aceptar` | Driver accepts a ride |
+| `rides.updateStatus(id)` | `PATCH /api/viajes/:id/estado` | Updates ride status by ID |
+| `chat.messages(threadId)` | `GET /api/chats/:threadId/mensajes` | Fetches chat message history |
+
+## Socket.io config
+
+The `SOCKET_CONFIG` object controls connection and reconnection behaviour for the Socket.io client:
+
+```typescript
+export const SOCKET_CONFIG = {
+  url: getEnvVar('EXPO_PUBLIC_SOCKET_URL', 'http://localhost:3000'),
+
+  reconnection: true,
+  reconnectionAttempts: 5,
+  reconnectionDelay: 2000,   // ms between retries
+
+  connectionTimeout: 10000,  // ms before giving up on initial connect
+} as const;
+```
+
+The socket is created in [`useSocket`](/frontend/hooks/use-socket) which passes these values directly to the `io()` constructor. After 5 failed reconnection attempts the socket stops retrying and emits a `connect_error` event.
+
+## Location config
+
+`LOCATION_CONFIG` drives all GPS-related behaviour — update cadence for drivers, the minimum movement threshold, and the default map region centred on Crucita:
+
+```typescript
+export const LOCATION_CONFIG = {
+  /** How often drivers push a GPS update (ms) */
+  driverUpdateIntervalMs: 5000,
+
+  /** Desired GPS accuracy level */
+  desiredAccuracy: 'balanced' as const,
+
+  /** Minimum movement before triggering an update (metres) */
+  distanceFilterMeters: 10,
+
+  /** Default map region — Crucita, Manabí, Ecuador */
+  defaultRegion: {
+    latitude:      -1.0448,
+    longitude:     -80.5432,
+    latitudeDelta:  0.02,
+    longitudeDelta: 0.02,
+  },
+} as const;
+```
+
+See [`useLocation`](/frontend/hooks/use-location) for how these values are consumed at runtime.
+
+## App metadata
+
+The `APP_CONFIG` object stores static application-level constants:
+
+```typescript
+export const APP_CONFIG = {
+  name:    'CruciDrive',
+  version: '1.0.0',
+
+  /** Mobile data cap per driver shift (bytes) — 15 MB */
+  driverDataLimitBytes: 15 * 1024 * 1024,
+} as const;
+```
+
+`driverDataLimitBytes` is exposed in the driver profile screen as a data-usage indicator, reminding drivers in low-connectivity areas of Crucita how much data the app has consumed in the current shift.
